@@ -1,0 +1,25 @@
+# env / secrets
+.env
+.env.*
+!.env.example
+
+# deps
+node_modules/
+
+# build outputs
+public/
+web/dist/
+
+# runtime data
+logs/
+data.json
+agent.log
+agent.pid
+
+# misc
+.DS_Store
+*.log
+
+# editors
+.vscode/
+.idea/
