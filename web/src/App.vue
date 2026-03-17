@@ -233,6 +233,31 @@
 
           <!-- 输入区 -->
           <div class="shrink-0 border-t border-slate-800/60 p-3 input-safe-bottom">
+            <div v-if="attachments.length" class="mb-2 flex gap-2 overflow-x-auto scrollbar pb-1">
+              <div
+                v-for="item in attachments"
+                :key="item.id"
+                class="relative w-20 h-20 rounded-xl overflow-hidden border border-slate-700/60 bg-slate-900/70 shrink-0"
+              >
+                <img :src="item.previewUrl" alt="" class="w-full h-full object-cover" />
+                <div v-if="item.uploading" class="absolute inset-0 bg-slate-900/70 flex items-center justify-center">
+                  <svg class="w-5 h-5 animate-spin text-slate-300" viewBox="0 0 24 24" fill="none">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 12 0 12 0z"/>
+                  </svg>
+                </div>
+                <button
+                  class="absolute top-1 right-1 bg-slate-900/80 hover:bg-slate-800 text-slate-200 rounded-full w-6 h-6 flex items-center justify-center"
+                  @click="removeAttachment(item.id)"
+                  aria-label="移除图片"
+                >
+                  ×
+                </button>
+                <div v-if="item.error" class="absolute inset-0 bg-rose-900/80 text-[10px] text-rose-100 p-1">
+                  {{ item.error }}
+                </div>
+              </div>
+            </div>
             <div class="flex gap-2 items-end">
               <input
                 ref="fileInputRef"
@@ -267,6 +292,7 @@
                 placeholder="输入消息...（Enter 发送，Shift+Enter 换行）"
                 @keydown="handleKeydown"
                 @input="autoResize"
+                @paste="handlePaste"
                 :disabled="!socketConnected || !currentSessionId"
               ></textarea>
               <button
@@ -408,6 +434,7 @@ const showSidebar = ref(true);
 const showSettings = ref(false);
 const showDiagPanel = ref(false);
 const streamState = ref(null); // { taskId, content, displayed, reasoning }
+const attachments = ref([]);
 const uploading = ref(false);
 let _streamTimer = null;
 
@@ -485,7 +512,11 @@ const filteredSessions = computed(() => {
   const key = search.value.toLowerCase();
   return sessions.value.filter((s) => s.title.toLowerCase().includes(key));
 });
-const canSend = computed(() => !sending.value && socketConnected.value && !!currentSessionId.value && !!input.value.trim());
+const canSend = computed(() => !sending.value
+  && socketConnected.value
+  && !!currentSessionId.value
+  && !uploading.value
+  && (!!input.value.trim() || attachments.value.length > 0));
 const agentProcessing = computed(() => lastTaskStatus.value === 'claimed');
 const statusDisplay = computed(() => {
   if (!token.value) return '请先配置 Token';
@@ -561,6 +592,54 @@ async function uploadImage(file) {
   return data.url;
 }
 
+function refreshUploading() {
+  uploading.value = attachments.value.some((item) => item.uploading);
+}
+
+function addAttachment(file) {
+  const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const previewUrl = URL.createObjectURL(file);
+  const item = {
+    id,
+    name: file.name,
+    previewUrl,
+    url: '',
+    uploading: true,
+    error: ''
+  };
+  attachments.value.push(item);
+  refreshUploading();
+  return item;
+}
+
+async function startUpload(file) {
+  const item = addAttachment(file);
+  try {
+    const url = await uploadImage(file);
+    item.url = url;
+    item.uploading = false;
+    item.error = '';
+    status.value = '图片已上传';
+  } catch (error) {
+    item.uploading = false;
+    item.error = error.message || '上传失败';
+    status.value = `上传失败：${item.error}`;
+  } finally {
+    refreshUploading();
+  }
+}
+
+function removeAttachment(id) {
+  const idx = attachments.value.findIndex((item) => item.id === id);
+  if (idx === -1) return;
+  const item = attachments.value[idx];
+  if (item?.previewUrl) {
+    try { URL.revokeObjectURL(item.previewUrl); } catch (_) {}
+  }
+  attachments.value.splice(idx, 1);
+  refreshUploading();
+}
+
 function insertAtCursor(text) {
   const el = textareaRef.value;
   if (!el) {
@@ -594,18 +673,23 @@ async function handleImageChange(event) {
     status.value = '仅支持图片文件';
     return;
   }
-  uploading.value = true;
   status.value = '上传中...';
-  try {
-    const url = await uploadImage(file);
-    const md = `![${file.name}](${url})`;
-    insertAtCursor(md);
-    status.value = '图片已插入';
-  } catch (error) {
-    status.value = `上传失败：${error.message}`;
-  } finally {
-    uploading.value = false;
+  startUpload(file);
+}
+
+function handlePaste(event) {
+  const items = event?.clipboardData?.items || [];
+  const images = [];
+  for (const item of items) {
+    if (item.type && item.type.startsWith('image/')) {
+      const file = item.getAsFile();
+      if (file) images.push(file);
+    }
   }
+  if (!images.length) return;
+  event.preventDefault();
+  status.value = '上传中...';
+  images.forEach((file) => startUpload(file));
 }
 
 function connectSocket() {
@@ -924,16 +1008,36 @@ function autoResize() {
 }
 
 async function sendMessage() {
-  if (!input.value.trim()) {
+  if (!input.value.trim() && attachments.value.length === 0) {
     status.value = '请输入内容';
+    return;
+  }
+  if (uploading.value) {
+    status.value = '请等待图片上传完成';
     return;
   }
   if (!currentSessionId.value) {
     status.value = '请先创建会话';
     return;
   }
-  const content = input.value.trim();
+  let content = input.value.trim();
+  const imageMarkdown = attachments.value
+    .filter((item) => item.url)
+    .map((item) => `![${item.name}](${item.url})`)
+    .join('\n');
+  if (content && imageMarkdown) {
+    content = `${content}\n\n${imageMarkdown}`;
+  } else if (!content && imageMarkdown) {
+    content = imageMarkdown;
+  }
   input.value = '';
+  attachments.value.forEach((item) => {
+    if (item.previewUrl) {
+      try { URL.revokeObjectURL(item.previewUrl); } catch (_) {}
+    }
+  });
+  attachments.value = [];
+  refreshUploading();
 
   if (!socketConnected.value) {
     status.value = 'WebSocket 未连接';
@@ -1037,6 +1141,11 @@ onBeforeUnmount(() => {
   height: auto;
   border-radius: 12px;
   border: 1px solid rgba(148, 163, 184, 0.2);
+}
+@media (max-width: 640px) {
+  .prose :deep(img) {
+    border-radius: 10px;
+  }
 }
 
 /* Fade transition（遮罩层） */
