@@ -1149,6 +1149,21 @@ onBeforeUnmount(() => {
 /* GitHub Markdown body */
 .markdown-body {
   background: transparent;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+/* 解决列表样式被全局样式重置的问题（scoped 需要 :deep） */
+:deep(.markdown-body ul) {
+  list-style: disc;
+  padding-left: 1.25rem;
+}
+:deep(.markdown-body ol) {
+  list-style: decimal;
+  padding-left: 1.25rem;
+}
+:deep(.markdown-body li) {
+  margin: 0.2em 0;
 }
 
 /* Fade transition（遮罩层） */
