@@ -75,6 +75,7 @@ relay/
 - `DELETE /sessions/:id`
 - `GET /sessions/:id/messages`
 - `POST /sessions/:id/messages`
+- `POST /upload`（图片上传，返回 URL）
 - `POST /push-task`（兼容旧版）
 - `GET /fetch-task`（兼容旧版）
 - `POST /submit-result`（兼容旧版）

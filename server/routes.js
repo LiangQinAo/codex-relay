@@ -1,3 +1,6 @@
+const path = require('path');
+const multer = require('multer');
+
 function createAuthMiddleware(config) {
   return function requireToken(req, res, next) {
     if (!config.AUTH_TOKEN) {
@@ -38,8 +41,47 @@ function registerRoutes(app, ctx) {
 
   const requireToken = createAuthMiddleware(config);
 
+  const upload = multer({
+    storage: multer.diskStorage({
+      destination: (req, file, cb) => cb(null, config.UPLOAD_DIR),
+      filename: (req, file, cb) => {
+        const ext = path.extname(file.originalname || '');
+        cb(null, `${Date.now()}-${uuidv4()}${ext}`);
+      }
+    }),
+    limits: {
+      fileSize: config.MAX_UPLOAD_MB * 1024 * 1024
+    },
+    fileFilter: (req, file, cb) => {
+      if (!file.mimetype || !file.mimetype.startsWith('image/')) {
+        cb(new Error('only image uploads are allowed'));
+        return;
+      }
+      cb(null, true);
+    }
+  });
+
   app.get('/health', (req, res) => {
     res.json({ ok: true, queueLength: taskQueue.length, hasToken: Boolean(config.AUTH_TOKEN) });
+  });
+
+  app.post('/upload', requireToken, (req, res) => {
+    upload.single('file')(req, res, (err) => {
+      if (err) {
+        return res.status(400).json({ error: err.message });
+      }
+      if (!req.file) {
+        return res.status(400).json({ error: 'file is required' });
+      }
+      const payload = {
+        url: `/uploads/${req.file.filename}`,
+        name: req.file.originalname,
+        size: req.file.size,
+        mime: req.file.mimetype
+      };
+      log('upload', 'image uploaded', payload);
+      return res.json(payload);
+    });
   });
 
   app.get('/agent/status', requireToken, (req, res) => {

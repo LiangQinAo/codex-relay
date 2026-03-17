@@ -1,5 +1,6 @@
 const express = require('express');
 const path = require('path');
+const fs = require('fs');
 const http = require('http');
 const os = require('os');
 const { Server } = require('socket.io');
@@ -30,6 +31,8 @@ app.use((req, res, next) => {
   next();
 });
 
+fs.mkdirSync(config.UPLOAD_DIR, { recursive: true });
+app.use('/uploads', express.static(config.UPLOAD_DIR));
 app.use(express.static(config.PUBLIC_DIR));
 
 const data = loadData(config.DATA_FILE);
@@ -130,7 +133,8 @@ const API_PREFIXES = [
   '/push-task',
   '/fetch-task',
   '/submit-result',
-  '/get-result'
+  '/get-result',
+  '/upload'
 ];
 
 app.get('*', (req, res, next) => {

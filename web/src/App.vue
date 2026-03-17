@@ -234,6 +234,30 @@
           <!-- 输入区 -->
           <div class="shrink-0 border-t border-slate-800/60 p-3 input-safe-bottom">
             <div class="flex gap-2 items-end">
+              <input
+                ref="fileInputRef"
+                type="file"
+                accept="image/*"
+                class="hidden"
+                @change="handleImageChange"
+              />
+              <button
+                class="shrink-0 w-11 h-11 flex items-center justify-center rounded-xl transition active:scale-95 disabled:cursor-not-allowed"
+                :class="uploading
+                  ? 'bg-slate-800 text-slate-500'
+                  : 'bg-slate-900/70 text-slate-300 hover:bg-slate-800'"
+                :disabled="!socketConnected || !currentSessionId || uploading"
+                @click="openImagePicker"
+                aria-label="上传图片"
+              >
+                <svg v-if="!uploading" class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M4 16l4-4a3 3 0 014 0l2 2m4-4v6a2 2 0 01-2 2H6a2 2 0 01-2-2V8a2 2 0 012-2h6m4 0h4v4" />
+                </svg>
+                <svg v-else class="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 12 0 12 0z"/>
+                </svg>
+              </button>
               <textarea
                 ref="textareaRef"
                 v-model="input"
@@ -348,6 +372,20 @@ import DOMPurify from 'dompurify';
 marked.setOptions({
   breaks: true
 });
+DOMPurify.setConfig({
+  ADD_TAGS: ['img'],
+  ADD_ATTR: ['target', 'rel', 'class']
+});
+DOMPurify.addHook('afterSanitizeAttributes', (node) => {
+  if (node.tagName === 'A') {
+    node.setAttribute('rel', 'noopener noreferrer');
+  }
+  if (node.tagName === 'IMG') {
+    const src = node.getAttribute('src') || '';
+    const allowed = src.startsWith('http') || src.startsWith('/uploads/') || src.startsWith('data:image/');
+    if (!allowed) node.removeAttribute('src');
+  }
+});
 
 const token = ref(localStorage.getItem('authToken') || '');
 const sessions = ref([]);
@@ -370,6 +408,7 @@ const showSidebar = ref(true);
 const showSettings = ref(false);
 const showDiagPanel = ref(false);
 const streamState = ref(null); // { taskId, content, displayed, reasoning }
+const uploading = ref(false);
 let _streamTimer = null;
 
 function _tickStream() {
@@ -394,6 +433,7 @@ function _finishStream() {
 }
 
 const textareaRef = ref(null);
+const fileInputRef = ref(null);
 const modalInputRef = ref(null);
 
 // Modal 系统（替代 window.prompt / window.confirm）
@@ -450,6 +490,7 @@ const agentProcessing = computed(() => lastTaskStatus.value === 'claimed');
 const statusDisplay = computed(() => {
   if (!token.value) return '请先配置 Token';
   if (!socketConnected.value) return '未连接';
+  if (uploading.value) return '上传中...';
   if (sending.value) return '发送中...';
   return status.value;
 });
@@ -501,6 +542,70 @@ async function request(path, options = {}) {
   }
 
   return response.json();
+}
+
+async function uploadImage(file) {
+  if (!token.value) throw new Error('缺少 Token');
+  const form = new FormData();
+  form.append('file', file);
+  const response = await fetch('/upload', {
+    method: 'POST',
+    headers: { 'x-auth-token': token.value },
+    body: form
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `HTTP ${response.status}`);
+  }
+  const data = await response.json();
+  return data.url;
+}
+
+function insertAtCursor(text) {
+  const el = textareaRef.value;
+  if (!el) {
+    input.value += text;
+    return;
+  }
+  const start = el.selectionStart ?? input.value.length;
+  const end = el.selectionEnd ?? input.value.length;
+  input.value = input.value.slice(0, start) + text + input.value.slice(end);
+  nextTick(() => {
+    el.focus();
+    const pos = start + text.length;
+    el.setSelectionRange(pos, pos);
+    autoResize();
+  });
+}
+
+function openImagePicker() {
+  if (!socketConnected.value || !currentSessionId.value) {
+    status.value = '请先连接并选择会话';
+    return;
+  }
+  fileInputRef.value?.click();
+}
+
+async function handleImageChange(event) {
+  const file = event?.target?.files?.[0];
+  event.target.value = '';
+  if (!file) return;
+  if (!file.type || !file.type.startsWith('image/')) {
+    status.value = '仅支持图片文件';
+    return;
+  }
+  uploading.value = true;
+  status.value = '上传中...';
+  try {
+    const url = await uploadImage(file);
+    const md = `![${file.name}](${url})`;
+    insertAtCursor(md);
+    status.value = '图片已插入';
+  } catch (error) {
+    status.value = `上传失败：${error.message}`;
+  } finally {
+    uploading.value = false;
+  }
 }
 
 function connectSocket() {
@@ -925,6 +1030,14 @@ onBeforeUnmount(() => {
   to   { opacity: 1; transform: translateY(0); }
 }
 .msg-fade-in { animation: msgFadeIn 0.2s ease-out; }
+
+/* Markdown 图片样式 */
+.prose :deep(img) {
+  max-width: 100%;
+  height: auto;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+}
 
 /* Fade transition（遮罩层） */
 .fade-enter-active, .fade-leave-active { transition: opacity 0.2s ease; }

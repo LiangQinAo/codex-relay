@@ -15,6 +15,7 @@ logs/
 data.json
 agent.log
 agent.pid
+uploads/
 
 # misc
 .DS_Store
