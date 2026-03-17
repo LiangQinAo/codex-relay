@@ -1160,6 +1160,50 @@ onBeforeUnmount(() => {
   }
 }
 
+/* Markdown 排版（替代 typography 插件的基础样式） */
+.prose :deep(h1),
+.prose :deep(h2),
+.prose :deep(h3) {
+  font-weight: 600;
+  margin: 0.6em 0 0.4em;
+}
+.prose :deep(h1) { font-size: 1.25rem; }
+.prose :deep(h2) { font-size: 1.15rem; }
+.prose :deep(h3) { font-size: 1.05rem; }
+.prose :deep(p) { margin: 0.4em 0; }
+.prose :deep(ul),
+.prose :deep(ol) {
+  margin: 0.4em 0;
+  padding-left: 1.25rem;
+}
+.prose :deep(ul) { list-style: disc; }
+.prose :deep(ol) { list-style: decimal; }
+.prose :deep(li) { margin: 0.2em 0; }
+.prose :deep(code) {
+  background: rgba(15, 23, 42, 0.7);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 6px;
+  padding: 0.1em 0.35em;
+}
+.prose :deep(pre) {
+  background: rgba(15, 23, 42, 0.85);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 10px;
+  padding: 0.75em 0.9em;
+  overflow-x: auto;
+}
+.prose :deep(blockquote) {
+  border-left: 3px solid rgba(148, 163, 184, 0.35);
+  padding-left: 0.8em;
+  color: rgba(148, 163, 184, 0.9);
+  margin: 0.6em 0;
+}
+.prose :deep(a) {
+  color: rgb(56, 189, 248);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 /* Fade transition（遮罩层） */
 .fade-enter-active, .fade-leave-active { transition: opacity 0.2s ease; }
 .fade-enter-from, .fade-leave-to { opacity: 0; }
