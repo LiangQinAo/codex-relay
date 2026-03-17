@@ -897,13 +897,25 @@ function startTypewriter(message) {
   typingTimers.set(message.id, timer);
 }
 
+function escapeHtml(text) {
+  return (text || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
 function renderMarkdownText(text) {
   const html = marked.parse(text || '');
   return DOMPurify.sanitize(html);
 }
 
 function renderMarkdown(message) {
-  return renderMarkdownText(message._display ?? message.content ?? '');
+  const raw = message._display ?? message.content ?? '';
+  if (message.role === 'user') {
+    // 用户消息：允许 markdown，但不允许原始 HTML 直接渲染
+    return renderMarkdownText(escapeHtml(raw));
+  }
+  return renderMarkdownText(raw);
 }
 
 async function scrollToBottom() {
