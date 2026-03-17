@@ -189,8 +189,7 @@
                   : 'bg-gradient-to-br from-cyan-400 to-cyan-500 text-slate-900 rounded-tr-sm'"
               >
                 <div
-                  class="prose max-w-none text-sm leading-relaxed"
-                  :class="message.role === 'assistant' ? 'prose-invert prose-slate' : 'prose-neutral'"
+                  class="markdown-body"
                   v-html="renderMarkdown(message)"
                 ></div>
                 <div
@@ -214,7 +213,7 @@
             <div v-if="streamState?.content" class="flex justify-start msg-fade-in">
               <div class="max-w-[88%] sm:max-w-[80%] rounded-2xl rounded-tl-sm px-4 py-3 text-sm leading-relaxed bg-slate-900/80 border border-cyan-400/20">
                 <div
-                  class="prose max-w-none text-sm leading-relaxed prose-invert prose-slate"
+                  class="markdown-body"
                   v-html="renderMarkdownText(streamState.displayed)"
                 ></div>
                 <span v-if="streamState.displayed.length < streamState.content.length" class="stream-cursor inline-block w-[2px] h-[1em] bg-cyan-400 ml-0.5 align-text-bottom rounded-sm"></span>
@@ -1147,61 +1146,9 @@ onBeforeUnmount(() => {
 }
 .msg-fade-in { animation: msgFadeIn 0.2s ease-out; }
 
-/* Markdown 图片样式 */
-.prose :deep(img) {
-  max-width: 100%;
-  height: auto;
-  border-radius: 12px;
-  border: 1px solid rgba(148, 163, 184, 0.2);
-}
-@media (max-width: 640px) {
-  .prose :deep(img) {
-    border-radius: 10px;
-  }
-}
-
-/* Markdown 排版（替代 typography 插件的基础样式） */
-.prose :deep(h1),
-.prose :deep(h2),
-.prose :deep(h3) {
-  font-weight: 600;
-  margin: 0.6em 0 0.4em;
-}
-.prose :deep(h1) { font-size: 1.25rem; }
-.prose :deep(h2) { font-size: 1.15rem; }
-.prose :deep(h3) { font-size: 1.05rem; }
-.prose :deep(p) { margin: 0.4em 0; }
-.prose :deep(ul),
-.prose :deep(ol) {
-  margin: 0.4em 0;
-  padding-left: 1.25rem;
-}
-.prose :deep(ul) { list-style: disc; }
-.prose :deep(ol) { list-style: decimal; }
-.prose :deep(li) { margin: 0.2em 0; }
-.prose :deep(code) {
-  background: rgba(15, 23, 42, 0.7);
-  border: 1px solid rgba(148, 163, 184, 0.2);
-  border-radius: 6px;
-  padding: 0.1em 0.35em;
-}
-.prose :deep(pre) {
-  background: rgba(15, 23, 42, 0.85);
-  border: 1px solid rgba(148, 163, 184, 0.2);
-  border-radius: 10px;
-  padding: 0.75em 0.9em;
-  overflow-x: auto;
-}
-.prose :deep(blockquote) {
-  border-left: 3px solid rgba(148, 163, 184, 0.35);
-  padding-left: 0.8em;
-  color: rgba(148, 163, 184, 0.9);
-  margin: 0.6em 0;
-}
-.prose :deep(a) {
-  color: rgb(56, 189, 248);
-  text-decoration: underline;
-  text-underline-offset: 2px;
+/* GitHub Markdown body */
+.markdown-body {
+  background: transparent;
 }
 
 /* Fade transition（遮罩层） */
