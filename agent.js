@@ -36,7 +36,6 @@ function runCodex(prompt, onChunk) {
     const args = [
       'exec',
       '--json',
-      '--full-auto',
       '--skip-git-repo-check',
     ];
     if (CODEX_CWD) args.push('--cd', CODEX_CWD);
