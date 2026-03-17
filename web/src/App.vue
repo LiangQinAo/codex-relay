@@ -318,6 +318,7 @@
                 </svg>
               </button>
             </div>
+            </div>
             <div class="mt-2 flex items-center justify-between px-1 text-[11px] text-slate-600 h-4">
               <span>{{ statusDisplay }}</span>
               <span v-if="lastTaskStatus" class="text-slate-700">{{ lastTaskStatus }}<span v-if="lastTaskAt"> · {{ formatRelativeTime(lastTaskAt) }}</span></span>
