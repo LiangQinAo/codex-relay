@@ -8,13 +8,49 @@
 
 html, body, #app {
   height: 100%;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
 }
 
 body {
   font-family: "Space Grotesk", system-ui, sans-serif;
   background: radial-gradient(1200px 800px at 10% 0%, #142348 0%, #0a0f1a 55%, #070b14 100%);
-  overflow: hidden;
   overscroll-behavior: none;
+  overflow-x: hidden;
+  overflow-x: clip;
+}
+
+#app {
+  min-width: 0;
+  overflow-x: hidden;
+}
+
+img, svg, video, canvas, iframe {
+  max-width: 100%;
+}
+
+.prose pre {
+  max-width: 100%;
+}
+
+.prose {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.prose code,
+.prose pre code {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.prose table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
 }
 
 .scrollbar {
@@ -48,4 +84,22 @@ body {
   background: rgba(15, 23, 42, 0.6);
   padding: 0.15rem 0.35rem;
   border-radius: 0.4rem;
+}
+
+@media (max-width: 640px) {
+  .prose pre,
+  .prose pre code {
+    white-space: pre-wrap;
+  }
+  .prose pre {
+    overflow-x: hidden;
+  }
+}
+
+@media (max-width: 1024px) {
+  input,
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
 }

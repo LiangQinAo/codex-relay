@@ -278,6 +278,19 @@ function registerRoutes(app, ctx) {
     });
   });
 
+  app.get('/sessions/:id/task-status', requireToken, (req, res) => {
+    const session = getSessionOr404(data, req, res);
+    if (!session) return;
+
+    const tasks = data.tasks
+      .filter((task) => task.sessionId === session.id && task.type === 'chat');
+    const active = tasks
+      .filter((task) => task.status !== 'completed')
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+    res.json({ task: active[0] || null });
+  });
+
   app.post('/sessions/:id/messages', requireToken, (req, res) => {
     const session = getSessionOr404(data, req, res);
     if (!session) return;

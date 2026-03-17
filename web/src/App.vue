@@ -34,6 +34,10 @@
             <span class="w-1 h-1 rounded-full" :class="socketConnected ? 'bg-emerald-400' : 'bg-rose-400'"></span>
             {{ socketConnected ? '已连接' : '断开' }}
           </span>
+          <span
+            class="text-[10px] px-2 py-1 rounded-lg border border-slate-800/70 bg-slate-900/40 text-slate-500 font-mono"
+            :title="buildLabel"
+          >版本 {{ buildLabel }}</span>
           <button
             class="p-2 rounded-xl transition active:scale-95"
             :class="showSettings ? 'bg-slate-700 text-cyan-300' : 'hover:bg-slate-800 text-slate-400 hover:text-slate-200'"
@@ -70,6 +74,7 @@
             >保存</button>
           </div>
           <p class="text-[11px]"><span class="text-slate-500">连接：</span><span :class="socketConnected ? 'text-emerald-400' : 'text-rose-400'">{{ socketConnected ? '已连接' : '断开' }}</span></p>
+          <p class="text-[11px]"><span class="text-slate-500">版本：</span><span class="font-mono text-slate-400" :title="buildLabel">{{ buildLabel }}</span></p>
         </div>
         <div class="space-y-2">
           <p class="text-[10px] font-semibold uppercase tracking-widest text-slate-500">当前会话</p>
@@ -105,7 +110,7 @@
 
     <!-- ── 主体区：侧边栏 + 聊天 ──────────────────────────── -->
     <div class="flex-1 min-h-0 overflow-hidden">
-      <div class="max-w-7xl mx-auto h-full px-4 py-4 flex gap-4">
+      <div class="max-w-7xl mx-auto h-full w-full min-w-0 px-4 py-4 flex gap-4 overflow-hidden">
         <!-- 侧边栏遮罩（移动端） -->
         <transition name="fade">
           <div
@@ -140,7 +145,7 @@
               placeholder="搜索..."
             />
           </div>
-          <div class="flex-1 min-h-0 overflow-y-auto scrollbar -mr-1 pr-1 space-y-1">
+          <div class="flex-1 min-h-0 overflow-y-auto overflow-x-hidden scrollbar pr-1 space-y-1">
             <button
               v-for="session in filteredSessions"
               :key="session.id"
@@ -160,8 +165,8 @@
         </aside>
 
         <!-- 聊天主面板 -->
-        <main class="flex-1 min-h-0 glass rounded-2xl flex flex-col overflow-hidden">
-          <div class="flex-1 min-h-0 overflow-y-auto scrollbar px-4 py-4 space-y-3" ref="messageBox">
+        <main class="flex-1 min-h-0 min-w-0 glass rounded-2xl flex flex-col overflow-hidden">
+          <div class="flex-1 min-h-0 min-w-0 overflow-y-auto overflow-x-hidden scrollbar px-4 py-4 space-y-3" ref="messageBox">
             <!-- 空状态 -->
             <div v-if="!messages.length" class="h-full flex flex-col items-center justify-center gap-4 select-none">
               <div class="w-14 h-14 rounded-2xl bg-slate-800/60 flex items-center justify-center">
@@ -189,7 +194,7 @@
                   : 'bg-gradient-to-br from-cyan-400 to-cyan-500 text-slate-900 rounded-tr-sm'"
               >
                 <div
-                  class="markdown-body"
+                  class="markdown-body break-words"
                   v-html="renderMarkdown(message)"
                 ></div>
                 <div
@@ -213,7 +218,7 @@
             <div v-if="streamState?.content" class="flex justify-start msg-fade-in">
               <div class="max-w-[88%] sm:max-w-[80%] rounded-2xl rounded-tl-sm px-4 py-3 text-sm leading-relaxed bg-slate-900/80 border border-cyan-400/20">
                 <div
-                  class="markdown-body"
+                  class="markdown-body break-words"
                   v-html="renderMarkdownText(streamState.displayed)"
                 ></div>
                 <span v-if="streamState.displayed.length < streamState.content.length" class="stream-cursor inline-block w-[2px] h-[1em] bg-cyan-400 ml-0.5 align-text-bottom rounded-sm"></span>
@@ -282,6 +287,7 @@
                   <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 12 0 12 0z"/>
                 </svg>
               </button>
+            <div class="flex gap-2 items-end min-w-0">
               <textarea
                 ref="textareaRef"
                 v-model="input"
@@ -325,14 +331,14 @@
     <div class="shrink-0 border-t border-slate-800/40 bg-slate-950/60" style="padding-bottom: env(safe-area-inset-bottom)">
       <div class="max-w-7xl mx-auto px-4">
         <button
-          class="w-full flex items-center gap-1.5 py-2.5 text-[11px] text-slate-600 hover:text-slate-400 transition"
+          class="w-full min-w-0 flex flex-wrap items-center gap-1.5 py-2.5 text-[11px] text-slate-600 hover:text-slate-400 transition"
           @click="showDiagPanel = !showDiagPanel"
         >
           <svg class="w-3.5 h-3.5 transition-transform duration-200" :class="showDiagPanel ? 'rotate-180' : ''" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" d="m19 9-7 7-7-7"/>
           </svg>
-          自检记录（{{ diagnostics.length }}）
-          <span v-if="diagnostics.length" class="ml-1 text-slate-700">· 最近：{{ formatRelativeTime(diagnostics[0]?.createdAt) }}</span>
+          <span class="min-w-0 break-words">自检记录（{{ diagnostics.length }}）</span>
+          <span v-if="diagnostics.length" class="min-w-0 break-words text-slate-700">· 最近：{{ formatRelativeTime(diagnostics[0]?.createdAt) }}</span>
         </button>
         <div v-if="showDiagPanel" class="pb-3 grid gap-3 lg:grid-cols-2 max-h-56 overflow-y-auto scrollbar">
           <div
@@ -385,6 +391,15 @@
         </div>
       </div>
     </transition>
+
+    <!-- 版本标识（用于确认已发布的前端版本） -->
+    <div
+      class="fixed z-40 right-3 text-[10px] px-2 py-1 rounded-md border border-slate-700/70 bg-slate-900/80 text-slate-300 font-mono backdrop-blur"
+      :title="buildLabel"
+      style="bottom: calc(env(safe-area-inset-bottom) + 12px)"
+    >
+      版本 {{ buildLabel }}
+    </div>
   </div>
 </template>
 
@@ -410,6 +425,23 @@ DOMPurify.addHook('afterSanitizeAttributes', (node) => {
     const allowed = src.startsWith('http') || src.startsWith('/uploads/') || src.startsWith('data:image/');
     if (!allowed) node.removeAttribute('src');
   }
+});
+
+const appVersion = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : 'dev';
+const buildTimeRaw = typeof __BUILD_TIME__ !== 'undefined' ? __BUILD_TIME__ : '';
+const gitCommit = typeof __GIT_COMMIT__ !== 'undefined' ? __GIT_COMMIT__ : 'nogit';
+const buildTimeShort = computed(() => {
+  if (!buildTimeRaw) return '';
+  const date = new Date(buildTimeRaw);
+  if (Number.isNaN(date.getTime())) return buildTimeRaw;
+  const pad2 = (value) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())} ${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
+});
+const buildLabel = computed(() => {
+  const parts = [`v${appVersion}`];
+  if (buildTimeShort.value) parts.push(buildTimeShort.value);
+  if (gitCommit && gitCommit !== 'nogit') parts.push(`#${gitCommit}`);
+  return parts.join(' · ');
 });
 
 const token = ref(localStorage.getItem('authToken') || '');
@@ -815,6 +847,7 @@ async function selectSession(id) {
     socket.emit('session:subscribe', id);
   }
   await loadMessages({ reset: true, typewriter: false });
+  await refreshTaskStatus();
   if (window.innerWidth < 1024) {
     showSidebar.value = false;
   }
@@ -845,6 +878,28 @@ async function loadMessages(options = {}) {
     }
   } catch (error) {
     status.value = `加载消息失败：${error.message}`;
+  }
+}
+
+async function refreshTaskStatus() {
+  if (!token.value) return;
+  if (!currentSessionId.value) {
+    lastTaskStatus.value = '';
+    lastTaskAt.value = null;
+    return;
+  }
+  try {
+    const data = await request(`/sessions/${currentSessionId.value}/task-status`);
+    const task = data?.task || null;
+    if (task && task.status && task.status !== 'completed') {
+      lastTaskStatus.value = task.status;
+      lastTaskAt.value = task.startedAt || task.createdAt || null;
+      return;
+    }
+    lastTaskStatus.value = '';
+    lastTaskAt.value = null;
+  } catch (error) {
+    console.warn('刷新任务状态失败', error);
   }
 }
 
@@ -1018,6 +1073,27 @@ function autoResize() {
   el.style.height = Math.min(el.scrollHeight, 160) + 'px';
 }
 
+async function refreshOnFocus() {
+  if (!token.value) return;
+  if (!socket) {
+    connectSocket();
+  } else if (!socketConnected.value) {
+    socket.connect();
+  } else if (currentSessionId.value) {
+    socket.emit('session:subscribe', currentSessionId.value);
+  }
+  clearStreamState();
+  lastTaskStatus.value = '';
+  lastTaskAt.value = null;
+  if (currentSessionId.value) {
+    await loadMessages({ reset: true, typewriter: false });
+    await refreshTaskStatus();
+  } else {
+    await loadSessions();
+    await refreshTaskStatus();
+  }
+}
+
 async function sendMessage() {
   if (!input.value.trim() && attachments.value.length === 0) {
     status.value = '请输入内容';
@@ -1091,11 +1167,19 @@ function handleResize() {
   }
 }
 
+function handleVisibilityChange() {
+  if (document.visibilityState === 'visible') {
+    refreshOnFocus();
+  }
+}
+
 onMounted(() => {
   if (window.innerWidth < 1024) {
     showSidebar.value = false;
   }
   window.addEventListener('resize', handleResize);
+  window.addEventListener('focus', refreshOnFocus);
+  document.addEventListener('visibilitychange', handleVisibilityChange);
   if (token.value) {
     init();
   }
@@ -1103,6 +1187,8 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('resize', handleResize);
+  window.removeEventListener('focus', refreshOnFocus);
+  document.removeEventListener('visibilitychange', handleVisibilityChange);
   clearStreamState();
 });
 </script>
