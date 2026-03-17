@@ -19,7 +19,7 @@ const log = createLogger(config.LOG_DIR);
 
 const app = express();
 app.disable('x-powered-by');
-app.use(express.json({ limit: '512kb' }));
+app.use(express.json({ limit: `${config.MAX_BODY_MB}mb` }));
 app.use((req, res, next) => {
   const start = Date.now();
   res.on('finish', () => {

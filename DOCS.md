@@ -47,6 +47,7 @@ relay/
 - `TASK_TIMEOUT_MS`: 任务超时回收时间
 - `AGENT_OFFLINE_MS`: Agent 离线判定
 - `MAX_MESSAGE_CHARS`: 单条消息上限长度
+- `MAX_BODY_MB`: HTTP 请求体大小上限（单位 MB）
 - `MAX_TASK_HISTORY`: 任务记录保留上限（完成任务会被裁剪）
 
 **Agent 配置：**

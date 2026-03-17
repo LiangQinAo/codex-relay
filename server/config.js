@@ -19,6 +19,7 @@ const config = {
   TASK_TIMEOUT_MS: Number.parseInt(process.env.TASK_TIMEOUT_MS || '300000', 10),
   AGENT_OFFLINE_MS: Number.parseInt(process.env.AGENT_OFFLINE_MS || '20000', 10),
   MAX_MESSAGE_CHARS: Number.parseInt(process.env.MAX_MESSAGE_CHARS || '8000', 10),
+  MAX_BODY_MB: Number.parseInt(process.env.MAX_BODY_MB || '20', 10),
   MAX_UPLOAD_MB: Number.parseInt(process.env.MAX_UPLOAD_MB || '10', 10),
   MAX_TASK_HISTORY: Number.parseInt(process.env.MAX_TASK_HISTORY || '2000', 10)
 };
