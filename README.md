@@ -1,5 +1,7 @@
 # Codex Relay
 
+中文 | [English](README.en.md)
+
 一个可自托管的 **Codex CLI 远程控制中转**：
 - 手机/网页端发指令
 - 服务器中转
