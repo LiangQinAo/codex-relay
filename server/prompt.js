@@ -15,6 +15,9 @@ function buildPrompt({ sessionId, newMessage, data, config }) {
   lines.push('5) 只有在确实没有办法继续时才询问用户，否则请默默完成任务并给出结果。');
   lines.push('6) 能力边界：只基于你实际可见的本地环境/文件/命令输出，不要编造。');
   lines.push('7) 需要更多信息时，明确说明缺口并给出下一步。');
+  lines.push('8) 若用户消息中包含图片链接（例如 /uploads/... 或 http(s)://.../uploads/...），这是由中转服务器托管的远程图片，不是本地文件路径。');
+  lines.push('   - 请通过网络访问该 URL 获取图片内容，必要时先下载到临时目录再处理。');
+  lines.push('   - 若仅有相对路径 /uploads/xxx，请用环境变量 SERVER_URL 作为前缀拼成完整 URL。');
 
   if (session?.summary) {
     lines.push('【摘要】');

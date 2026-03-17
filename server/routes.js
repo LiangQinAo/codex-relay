@@ -73,8 +73,12 @@ function registerRoutes(app, ctx) {
       if (!req.file) {
         return res.status(400).json({ error: 'file is required' });
       }
+      const pathUrl = `/uploads/${req.file.filename}`;
+      const host = req.get('host');
+      const protocol = req.protocol || 'http';
       const payload = {
-        url: `/uploads/${req.file.filename}`,
+        url: host ? `${protocol}://${host}${pathUrl}` : pathUrl,
+        path: pathUrl,
         name: req.file.originalname,
         size: req.file.size,
         mime: req.file.mimetype
