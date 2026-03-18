@@ -82,7 +82,7 @@ function loadCodexProxyConfig() {
 async function precheckProxyAvailability() {
   const { baseUrl, apiKey, model } = loadCodexProxyConfig();
   if (!baseUrl || !apiKey) return null;
-  const url = `${baseUrl.replace(/\\/+$/, '')}/responses`;
+  const url = `${baseUrl.replace(/\/+$/, '')}/responses`;
   const payload = {
     model: model || 'gpt-5.2-codex',
     input: 'ping',
