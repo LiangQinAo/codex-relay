@@ -36,6 +36,7 @@ function isLikelyImageUrl(url) {
   return (
     lower.includes('/uploads/')
     || lower.match(/\.(png|jpg|jpeg|webp|gif|bmp|tif|tiff)(\\?|#|$)/)
+    || lower.endsWith('/file')
   );
 }
 
@@ -91,7 +92,10 @@ async function preparePromptForImages(task) {
     return prompt;
   }
 
-  const urls = extractUrls(prompt).filter(isLikelyImageUrl);
+  const urls = extractUrls(prompt).filter((url) => {
+    if (task.type && task.type.startsWith('vision')) return true;
+    return isLikelyImageUrl(url);
+  });
   if (!urls.length) return prompt;
 
   let updated = prompt;
