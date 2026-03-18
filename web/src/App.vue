@@ -1,5 +1,5 @@
 <template>
-  <div class="h-[100dvh] flex flex-col overflow-hidden bg-slate-950 text-slate-100">
+  <div class="min-h-[100dvh] flex flex-col overflow-y-auto md:overflow-hidden bg-slate-950 text-slate-100">
     <!-- 背景装饰光晕 -->
     <div class="pointer-events-none fixed inset-0 -z-10 overflow-hidden">
       <div class="absolute -top-40 right-0 w-[600px] h-[600px] rounded-full bg-cyan-500/5 blur-[120px]"></div>
