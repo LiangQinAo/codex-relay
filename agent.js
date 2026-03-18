@@ -43,7 +43,7 @@ function isLikelyImageUrl(url) {
 function extractUrls(text) {
   if (!text) return [];
   const urls = new Set();
-  const re = /(https?:\\/\\/[^\\s)\\]">]+)/g;
+  const re = new RegExp('https?://[^\\s)\\]\">]+', 'g');
   let match;
   while ((match = re.exec(text)) !== null) {
     urls.add(match[1]);
