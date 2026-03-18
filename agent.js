@@ -15,6 +15,7 @@ const CODEX_MAX_MS = Number.parseInt(process.env.CODEX_MAX_MS || '600000', 10);
 const CODEX_EARLY_JSON = process.env.CODEX_EARLY_JSON !== '0';
 const CODEX_VISION_REASONING = process.env.CODEX_VISION_REASONING || 'low';
 const CODEX_NO_MESSAGE_MS = Number.parseInt(process.env.CODEX_NO_MESSAGE_MS || '120000', 10);
+const CODEX_PRECHECK = process.env.CODEX_PRECHECK === '1';
 const AGENT_ID = process.env.AGENT_ID || `${os.hostname()}-${process.pid}`;
 const AGENT_NAME = process.env.AGENT_NAME || os.hostname();
 const AGENT_CAPACITY = Math.max(1, Number.parseInt(process.env.AGENT_CAPACITY || '1', 10));
@@ -33,6 +34,89 @@ if (!AUTH_TOKEN) {
 function truncate(text) {
   if (!text || text.length <= RESULT_MAX_CHARS) return text;
   return text.slice(0, RESULT_MAX_CHARS) + `\n... [truncated to ${RESULT_MAX_CHARS} chars]`;
+}
+
+function readFileSafe(filePath) {
+  try {
+    return fs.readFileSync(filePath, 'utf8');
+  } catch (_) {
+    return '';
+  }
+}
+
+function extractTomlValue(tomlText, key) {
+  if (!tomlText) return '';
+  const re = new RegExp(`^\\s*${key}\\s*=\\s*\"([^\"]*)\"`, 'm');
+  const match = tomlText.match(re);
+  return match ? match[1] : '';
+}
+
+function loadCodexProxyConfig() {
+  const configPath = path.join(os.homedir(), '.codex', 'config.toml');
+  const authPath = path.join(os.homedir(), '.codex', 'auth.json');
+  const configText = readFileSafe(configPath);
+  const authText = readFileSafe(authPath);
+
+  let apiKey = '';
+  try {
+    const parsed = JSON.parse(authText);
+    apiKey = parsed?.OPENAI_API_KEY || '';
+  } catch (_) {
+    apiKey = '';
+  }
+
+  const provider = extractTomlValue(configText, 'model_provider');
+  const model = extractTomlValue(configText, 'model');
+  let baseUrl = '';
+  if (provider) {
+    const sectionStart = configText.indexOf(`[model_providers.${provider}]`);
+    if (sectionStart >= 0) {
+      const after = configText.slice(sectionStart);
+      baseUrl = extractTomlValue(after, 'base_url');
+    }
+  }
+
+  return { baseUrl, apiKey, model };
+}
+
+async function precheckProxyAvailability() {
+  const { baseUrl, apiKey, model } = loadCodexProxyConfig();
+  if (!baseUrl || !apiKey) return null;
+  const url = `${baseUrl.replace(/\\/+$/, '')}/responses`;
+  const payload = {
+    model: model || 'gpt-5.2-codex',
+    input: 'ping',
+    max_output_tokens: 1
+  };
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+    const text = await res.text();
+    let parsed = null;
+    try { parsed = JSON.parse(text); } catch (_) { parsed = null; }
+    if (!res.ok) {
+      const err = parsed?.error || {};
+      return {
+        type: err.type || 'proxy_error',
+        message: err.message || `proxy error status ${res.status}`
+      };
+    }
+    if (parsed?.error?.type) {
+      return {
+        type: parsed.error.type,
+        message: parsed.error.message || 'proxy error'
+      };
+    }
+    return null;
+  } catch (err) {
+    return { type: 'proxy_unreachable', message: err?.message || String(err) };
+  }
 }
 
 function isLikelyImageUrl(url) {
@@ -504,6 +588,7 @@ async function runNext() {
     if (!task) return;
     running += 1;
     lastTaskId = task.id;
+    const startedAt = Date.now();
     const taskText = (task.prompt || task.command || '').slice(0, 160);
     const taskLen = (task.prompt || task.command || '').length;
     console.log(`[agent] task start id=${task.id} len=${taskLen} preview=${taskText}`);
@@ -514,6 +599,22 @@ async function runNext() {
     const configOverrides = [];
     if (isVision && CODEX_VISION_REASONING) {
       configOverrides.push(`model_reasoning_effort="${CODEX_VISION_REASONING}"`);
+    }
+    if (isVision && CODEX_PRECHECK) {
+      const precheck = await precheckProxyAvailability();
+      if (precheck) {
+        console.log(`[agent][precheck] fail type=${precheck.type} message=${precheck.message}`);
+        socket.emit('task:complete', {
+          id: task.id,
+          ok: false,
+          result: truncate(JSON.stringify({ error: precheck.type, message: precheck.message })),
+          durationMs: Date.now() - startedAt,
+          agentId: AGENT_ID
+        });
+        running -= 1;
+        socket.emit('agent:ready');
+        continue;
+      }
     }
     const result = await runCodex(preparedPrompt || '', { earlyJson, configOverrides, imagePaths }, ({ type, chunk }) => {
       socket.emit('task:stream', { id: task.id, type, chunk });
