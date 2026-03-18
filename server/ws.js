@@ -139,6 +139,9 @@ function registerSocket(io, ctx) {
         queue.emitAgentStatus(io);
       });
     } else {
+      // Frontend connected: immediately push latest agent status/queue info
+      queue.emitAgentStatus(io);
+
       socket.on('session:subscribe', (sessionId) => {
         if (!sessionId) return;
         socket.join(`session:${sessionId}`);
