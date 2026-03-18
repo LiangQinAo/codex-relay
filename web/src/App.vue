@@ -74,7 +74,6 @@
             >保存</button>
           </div>
           <p class="text-[11px]"><span class="text-slate-500">连接：</span><span :class="socketConnected ? 'text-emerald-400' : 'text-rose-400'">{{ socketConnected ? '已连接' : '断开' }}</span></p>
-          <p class="text-[11px]"><span class="text-slate-500">版本：</span><span class="font-mono text-slate-400" :title="buildLabel">{{ buildLabel }}</span></p>
         </div>
         <div class="space-y-2">
           <p class="text-[10px] font-semibold uppercase tracking-widest text-slate-500">当前会话</p>
@@ -393,14 +392,6 @@
       </div>
     </transition>
 
-    <!-- 版本标识（用于确认已发布的前端版本） -->
-    <div
-      class="fixed z-40 right-3 text-[10px] px-2 py-1 rounded-md border border-slate-700/70 bg-slate-900/80 text-slate-300 font-mono backdrop-blur"
-      :title="buildLabel"
-      style="bottom: calc(env(safe-area-inset-bottom) + 12px)"
-    >
-      版本 {{ buildLabel }}
-    </div>
   </div>
 </template>
 
