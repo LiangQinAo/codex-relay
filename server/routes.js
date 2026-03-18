@@ -128,6 +128,26 @@ function registerRoutes(app, ctx) {
     ].join('\n');
   }
 
+  function applyPromptTemplate(template, { imageUrl, indicators }) {
+    if (!template) return '';
+    const indicatorLines = (indicators || [])
+      .map((i) => `- ID: ${i.id}, 名称: ${i.name}`)
+      .join('\n');
+    const listText = indicatorLines || '(无)';
+
+    let output = String(template);
+    output = output.replace(/\$\{\s*indicators\s*\}/gi, listText);
+    output = output.replace(/\{\{\s*indicators\s*\}\}/gi, listText);
+    output = output.replace(/\$\{\s*imageUrl\s*\}/gi, imageUrl);
+    output = output.replace(/\{\{\s*imageUrl\s*\}\}/gi, imageUrl);
+
+    if (!output.includes(imageUrl)) {
+      output += `\n\n图片URL：\n${imageUrl}`;
+    }
+
+    return output;
+  }
+
   function extractJson(text) {
     if (!text) return null;
     const startObj = text.indexOf('{');
@@ -204,6 +224,7 @@ function registerRoutes(app, ctx) {
   app.post('/vision/medical', requireToken, async (req, res) => {
     const handle = async () => {
       const indicators = parseIndicators(req.body?.indicators);
+      const promptTemplate = typeof req.body?.prompt === 'string' ? req.body.prompt.trim() : '';
       const timeoutMs = Math.min(
         Math.max(Number.parseInt(req.body?.timeoutMs || '120000', 10), 1000),
         300000
@@ -254,7 +275,9 @@ function registerRoutes(app, ctx) {
         taskId: null
       };
 
-      const prompt = buildMedicalPrompt({ imageUrl, indicators });
+      const prompt = promptTemplate
+        ? applyPromptTemplate(promptTemplate, { imageUrl, indicators })
+        : buildMedicalPrompt({ imageUrl, indicators });
 
       const task = {
         id: uuidv4(),
