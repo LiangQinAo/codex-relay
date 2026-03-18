@@ -28,6 +28,9 @@ let nextIndex = 1;
 let lastNonZeroAt = Date.now();
 let tickInFlight = false;
 
+process.stdout.setMaxListeners(0);
+process.stderr.setMaxListeners(0);
+
 function clamp(min, max, value) {
   return Math.max(min, Math.min(max, value));
 }
@@ -43,7 +46,9 @@ function createLogStream(index) {
   const dir = ensureLogDir();
   if (!dir) return null;
   const file = path.join(dir, `agent-${index}.log`);
-  return fs.createWriteStream(file, { flags: 'a' });
+  const stream = fs.createWriteStream(file, { flags: 'a' });
+  stream.setMaxListeners(0);
+  return stream;
 }
 
 async function fetchStatus() {
