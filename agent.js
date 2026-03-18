@@ -46,7 +46,7 @@ function extractUrls(text) {
   const re = new RegExp('https?://[^\\s)\\]\">]+', 'g');
   let match;
   while ((match = re.exec(text)) !== null) {
-    urls.add(match[1]);
+    urls.add(match[0]);
   }
   return Array.from(urls);
 }
