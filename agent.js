@@ -1,5 +1,7 @@
 const os = require('os');
 const { spawn } = require('child_process');
+const fs = require('fs');
+const path = require('path');
 const { io } = require('socket.io-client');
 require('dotenv').config();
 
@@ -26,6 +28,88 @@ if (!AUTH_TOKEN) {
 function truncate(text) {
   if (!text || text.length <= RESULT_MAX_CHARS) return text;
   return text.slice(0, RESULT_MAX_CHARS) + `\n... [truncated to ${RESULT_MAX_CHARS} chars]`;
+}
+
+function isLikelyImageUrl(url) {
+  if (!url) return false;
+  const lower = url.toLowerCase();
+  return (
+    lower.includes('/uploads/')
+    || lower.match(/\.(png|jpg|jpeg|webp|gif|bmp|tif|tiff)(\\?|#|$)/)
+  );
+}
+
+function extractUrls(text) {
+  if (!text) return [];
+  const urls = new Set();
+  const re = /(https?:\\/\\/[^\\s)\\]">]+)/g;
+  let match;
+  while ((match = re.exec(text)) !== null) {
+    urls.add(match[1]);
+  }
+  return Array.from(urls);
+}
+
+function extFromContentType(ct) {
+  if (!ct) return '';
+  const mime = ct.split(';')[0].trim().toLowerCase();
+  const map = {
+    'image/png': '.png',
+    'image/jpeg': '.jpg',
+    'image/jpg': '.jpg',
+    'image/webp': '.webp',
+    'image/gif': '.gif',
+    'image/bmp': '.bmp',
+    'image/tiff': '.tiff'
+  };
+  return map[mime] || '';
+}
+
+async function downloadToTemp(url) {
+  const baseDir = path.join('/tmp', 'codex-relay', 'images');
+  fs.mkdirSync(baseDir, { recursive: true });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 20000);
+  try {
+    const res = await fetch(url, { signal: controller.signal });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const buf = Buffer.from(await res.arrayBuffer());
+    const ext = extFromContentType(res.headers.get('content-type'));
+    const name = `img-${Date.now()}-${Math.random().toString(16).slice(2)}${ext || '.img'}`;
+    const filePath = path.join(baseDir, name);
+    fs.writeFileSync(filePath, buf);
+    return filePath;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function preparePromptForImages(task) {
+  const prompt = task.prompt || task.command || '';
+  if (!prompt) return prompt;
+  if (!(task.type && task.type.startsWith('vision')) && !prompt.includes('图片')) {
+    return prompt;
+  }
+
+  const urls = extractUrls(prompt).filter(isLikelyImageUrl);
+  if (!urls.length) return prompt;
+
+  let updated = prompt;
+  const localNotes = [];
+  for (const url of urls) {
+    try {
+      const filePath = await downloadToTemp(url);
+      updated = updated.split(url).join(filePath);
+      localNotes.push(`已下载图片到本地路径：${filePath}`);
+    } catch (err) {
+      localNotes.push(`图片下载失败：${url} (${err.message || err})`);
+    }
+  }
+
+  if (localNotes.length) {
+    updated += `\n\n${localNotes.join('\n')}`;
+  }
+  return updated;
 }
 
 // ── codex exec --json runner ─────────────────────────────────────────────
@@ -228,7 +312,8 @@ async function runNext() {
     const taskLen = (task.prompt || task.command || '').length;
     console.log(`[agent] task start id=${task.id} len=${taskLen} preview=${taskText}`);
 
-    const result = await runCodex(task.prompt || task.command || '', ({ type, chunk }) => {
+    const preparedPrompt = await preparePromptForImages(task);
+    const result = await runCodex(preparedPrompt || '', ({ type, chunk }) => {
       socket.emit('task:stream', { id: task.id, type, chunk });
     });
     console.log(`[agent] task done id=${task.id} ok=${result.ok} exit=${result.exitCode} durationMs=${result.durationMs} outLen=${(result.output || '').length}`);
