@@ -14,6 +14,7 @@ function createQueueManager({
   buildPrompt
 }) {
   let agentPickIndex = 0;
+  const taskWaiters = new Map();
 
   function upsertAgent(agentId, updates = {}) {
     const existing = agents.get(agentId) || {
@@ -336,6 +337,16 @@ function createQueueManager({
         totalMs: task?.createdAt ? Date.now() - new Date(task.createdAt).getTime() : null
       });
       io.emit('queue:update', { queueLength: taskQueue.length });
+      const waiter = taskWaiters.get(taskId);
+      if (waiter) {
+        clearTimeout(waiter.timer);
+        taskWaiters.delete(taskId);
+        waiter.resolve({
+          ok,
+          result: resultText || '[empty result]',
+          task
+        });
+      }
       return;
     }
 
@@ -375,6 +386,31 @@ function createQueueManager({
     });
     io.emit('queue:update', { queueLength: taskQueue.length });
     pruneTasksIfNeeded();
+
+    const waiter = taskWaiters.get(taskId);
+    if (waiter) {
+      clearTimeout(waiter.timer);
+      taskWaiters.delete(taskId);
+      waiter.resolve({
+        ok,
+        result: resultText || '[empty result]',
+        task
+      });
+    }
+  }
+
+  function waitForTask(taskId, timeoutMs = 120000) {
+    return new Promise((resolve) => {
+      if (!taskId) {
+        resolve({ ok: false, error: 'missing task id' });
+        return;
+      }
+      const timer = setTimeout(() => {
+        taskWaiters.delete(taskId);
+        resolve({ ok: false, error: 'timeout' });
+      }, timeoutMs);
+      taskWaiters.set(taskId, { resolve, timer });
+    });
   }
 
   return {
@@ -392,7 +428,8 @@ function createQueueManager({
     broadcastTaskStatus,
     enqueueTask,
     dispatchTasks,
-    completeTask
+    completeTask,
+    waitForTask
   };
 }
 

@@ -61,6 +61,119 @@ function registerRoutes(app, ctx) {
     }
   });
 
+  function parseIndicators(raw) {
+    if (!raw) return [];
+    if (Array.isArray(raw)) return raw;
+    if (typeof raw === 'string') {
+      try {
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch (_) {
+        return [];
+      }
+    }
+    return [];
+  }
+
+  function buildMedicalPrompt({ imageUrl, indicators }) {
+    const indicatorLines = (indicators || [])
+      .map((i) => `- ID: ${i.id}, 名称: ${i.name}`)
+      .join('\n');
+    const listText = indicatorLines || '(无)';
+
+    return [
+      '请分析这张医疗化验单图片，提取以下信息：',
+      '1. 检查日期 (YYYY-MM-DD格式)',
+      '2. 所有的化验指标数据。',
+      '',
+      '【极其重要 - 核心指标】：请务必优先且准确地提取以下四个核心指标（只要化验单上有）：',
+      '- 白细胞 (WBC)',
+      '- 血红蛋白 (HGB)',
+      '- 中性粒细胞计数 (NEUT#)',
+      '- 血小板 (PLT)',
+      '',
+      '【极其重要 - 全面提取】：除了上述核心指标，请务必逐行扫描表格，提取出表格中的每一项化验指标！不要遗漏任何一行数据。',
+      '',
+      '注意：',
+      '1. 请仅提取表格中的实际化验指标！忽略页眉、页脚、医院名称、联系方式、备注说明等无关文本。',
+      '2. 提取指标名称时，请去除名称前后的特殊符号（如☆、*等）和英文缩写（如(UA)、(TC)等），只保留纯中文名称。',
+      '',
+      '我已经有一些预设的指标，列表如下：',
+      listText,
+      '',
+      '对于图片中提取到的每一个指标：',
+      "- 如果它能对应上预设列表中的某个指标，请提供该指标的 'matchedId'。",
+      "- 如果它是预设列表中没有的新指标，请不要提供 'matchedId'，但必须提供它的 'name' (名称), 'unit' (单位), 以及参考范围的 'minNormal' 和 'maxNormal' (如果有的话)。名称和单位必须简短（不超过20个字符）。",
+      "- 必须提供提取到的数值 'value'。",
+      '',
+      '图片URL：',
+      imageUrl,
+      '',
+      '【输出要求】',
+      '仅输出 JSON，不要 Markdown，不要额外解释或代码块。',
+      '输出格式如下：',
+      '{',
+      '  "checkDate": "YYYY-MM-DD" 或 null,',
+      '  "items": [',
+      '    {',
+      '      "name": "指标名",',
+      '      "matchedId": "预设ID(若有)",',
+      '      "value": "数值",',
+      '      "unit": "单位",',
+      '      "minNormal": "参考下限(可为空)",',
+      '      "maxNormal": "参考上限(可为空)"',
+      '    }',
+      '  ]',
+      '}'
+    ].join('\n');
+  }
+
+  function extractJson(text) {
+    if (!text) return null;
+    const startObj = text.indexOf('{');
+    const startArr = text.indexOf('[');
+    let start = -1;
+    if (startObj === -1) start = startArr;
+    else if (startArr === -1) start = startObj;
+    else start = Math.min(startObj, startArr);
+    if (start === -1) return null;
+
+    const openChar = text[start];
+    const closeChar = openChar === '{' ? '}' : ']';
+    let depth = 0;
+    let inString = false;
+    let escape = false;
+    for (let i = start; i < text.length; i += 1) {
+      const ch = text[i];
+      if (escape) {
+        escape = false;
+        continue;
+      }
+      if (ch === '\\') {
+        if (inString) escape = true;
+        continue;
+      }
+      if (ch === '"') {
+        inString = !inString;
+        continue;
+      }
+      if (inString) continue;
+      if (ch === openChar) depth += 1;
+      if (ch === closeChar) {
+        depth -= 1;
+        if (depth === 0) {
+          const slice = text.slice(start, i + 1);
+          try {
+            return JSON.parse(slice);
+          } catch (_) {
+            return null;
+          }
+        }
+      }
+    }
+    return null;
+  }
+
   app.get('/health', (req, res) => {
     res.json({ ok: true, queueLength: taskQueue.length, hasToken: Boolean(config.AUTH_TOKEN) });
   });
@@ -86,6 +199,115 @@ function registerRoutes(app, ctx) {
       log('upload', 'image uploaded', payload);
       return res.json(payload);
     });
+  });
+
+  app.post('/vision/medical', requireToken, async (req, res) => {
+    const handle = async () => {
+      const indicators = parseIndicators(req.body?.indicators);
+      const timeoutMs = Math.min(
+        Math.max(Number.parseInt(req.body?.timeoutMs || '120000', 10), 1000),
+        300000
+      );
+
+      let imageUrl = typeof req.body?.imageUrl === 'string' ? req.body.imageUrl.trim() : '';
+      if (!imageUrl && req.file?.filename) {
+        const pathUrl = `/uploads/${req.file.filename}`;
+        const host = req.get('host');
+        const protocol = req.protocol || 'http';
+        imageUrl = host ? `${protocol}://${host}${pathUrl}` : pathUrl;
+      }
+      if (imageUrl && imageUrl.startsWith('/uploads/')) {
+        const host = req.get('host');
+        const protocol = req.protocol || 'http';
+        if (host) imageUrl = `${protocol}://${host}${imageUrl}`;
+      }
+
+      if (!imageUrl) {
+        return res.status(400).json({ ok: false, error: 'imageUrl or file is required' });
+      }
+
+      const apiSession = data.sessions.find((s) => s.title === 'API Session' && s.archived)
+        || (() => {
+          const session = {
+            id: uuidv4(),
+            title: 'API Session',
+            systemPrompt: config.DEFAULT_SYSTEM_PROMPT,
+            summary: '',
+            summaryAnchor: 0,
+            summaryUpdatedAt: null,
+            summaryPending: false,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            archived: true
+          };
+          data.sessions.unshift(session);
+          saveData();
+          return session;
+        })();
+
+      const message = {
+        id: uuidv4(),
+        sessionId: apiSession.id,
+        role: 'user',
+        content: `[vision/medical] ${imageUrl}`,
+        createdAt: new Date().toISOString(),
+        taskId: null
+      };
+
+      const prompt = buildMedicalPrompt({ imageUrl, indicators });
+
+      const task = {
+        id: uuidv4(),
+        sessionId: apiSession.id,
+        userMessageId: message.id,
+        type: 'vision-medical',
+        command: '',
+        prompt,
+        status: 'queued',
+        createdAt: new Date().toISOString(),
+        startedAt: null,
+        completedAt: null,
+        ok: null
+      };
+
+      message.taskId = task.id;
+      data.messages.push(message);
+      queue.enqueueTask(io, task);
+      apiSession.updatedAt = new Date().toISOString();
+      saveData();
+
+      const result = await queue.waitForTask(task.id, timeoutMs);
+      if (!result || result.ok === false && result.error) {
+        return res.status(504).json({ ok: false, error: result?.error || 'timeout', taskId: task.id });
+      }
+
+      const parsed = extractJson(result.result || '');
+      if (!parsed) {
+        return res.status(502).json({
+          ok: false,
+          error: 'invalid json response',
+          taskId: task.id,
+          raw: result.result || ''
+        });
+      }
+
+      return res.json({
+        ok: result.ok,
+        taskId: task.id,
+        data: parsed,
+        raw: result.result || ''
+      });
+    };
+
+    if (req.is('multipart/form-data')) {
+      return upload.single('file')(req, res, (err) => {
+        if (err) {
+          return res.status(400).json({ ok: false, error: err.message });
+        }
+        return handle();
+      });
+    }
+    return handle();
   });
 
   app.get('/agent/status', requireToken, (req, res) => {

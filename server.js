@@ -134,7 +134,8 @@ const API_PREFIXES = [
   '/fetch-task',
   '/submit-result',
   '/get-result',
-  '/upload'
+  '/upload',
+  '/vision'
 ];
 
 app.get('*', (req, res, next) => {
