@@ -89,35 +89,36 @@ registerSocket(io, {
 setInterval(() => {
   const now = Date.now();
   const lastSeenAt = data.agent.lastSeenAt ? new Date(data.agent.lastSeenAt).getTime() : 0;
-  if (data.agent.status === 'online' && lastSeenAt && now - lastSeenAt > config.AGENT_OFFLINE_MS) {
-    data.agent.status = 'offline';
-    saveData();
-    queue.emitAgentStatus(io);
-  }
+    if (data.agent.status === 'online' && lastSeenAt && now - lastSeenAt > config.AGENT_OFFLINE_MS) {
+      data.agent.status = 'offline';
+      saveData();
+      queue.emitAgentStatus(io);
+    }
 }, 5000);
 
 setInterval(() => {
   const now = Date.now();
   let requeued = 0;
-  data.tasks.forEach((task) => {
-    if (task.status === 'claimed' && task.startedAt) {
-      const started = new Date(task.startedAt).getTime();
-      if (now - started > config.TASK_TIMEOUT_MS) {
-        task.status = 'queued';
-        task.startedAt = null;
-        task.ok = null;
-        if (task.assignedAgentId) {
-          const agent = agents.get(task.assignedAgentId);
-          if (agent && agent.busyCount > 0) {
-            agent.busyCount -= 1;
+    data.tasks.forEach((task) => {
+      if (task.status === 'claimed' && task.startedAt) {
+        const started = new Date(task.startedAt).getTime();
+        if (now - started > config.TASK_TIMEOUT_MS) {
+          task.status = 'queued';
+          task.startedAt = null;
+          task.ok = null;
+          if (task.assignedAgentId) {
+            const agent = agents.get(task.assignedAgentId);
+            if (agent && agent.busyCount > 0) {
+              agent.busyCount -= 1;
+            }
+            task.assignedAgentId = null;
           }
-          task.assignedAgentId = null;
+          queue.releaseSession(task);
+          taskQueue.push(task.id);
+          requeued += 1;
         }
-        taskQueue.push(task.id);
-        requeued += 1;
       }
-    }
-  });
+    });
   if (requeued > 0) {
     log('warn', 'requeued stuck tasks', { count: requeued });
     saveData();

@@ -15,6 +15,26 @@ function createQueueManager({
 }) {
   let agentPickIndex = 0;
   const taskWaiters = new Map();
+  const runningSessions = new Set();
+
+  function getSessionKey(task) {
+    return task && task.sessionId ? task.sessionId : null;
+  }
+
+  function isSessionLocked(task) {
+    const key = getSessionKey(task);
+    return key ? runningSessions.has(key) : false;
+  }
+
+  function lockSession(task) {
+    const key = getSessionKey(task);
+    if (key) runningSessions.add(key);
+  }
+
+  function releaseSession(task) {
+    const key = getSessionKey(task);
+    if (key) runningSessions.delete(key);
+  }
 
   function upsertAgent(agentId, updates = {}) {
     const existing = agents.get(agentId) || {
@@ -80,6 +100,7 @@ function createQueueManager({
         task.startedAt = null;
         task.ok = null;
         task.assignedAgentId = null;
+        releaseSession(task);
         taskQueue.push(task.id);
         requeued += 1;
       }
@@ -245,34 +266,58 @@ function createQueueManager({
     dispatchTasks(io);
   }
 
+  function takeNextRunnableTask() {
+    for (let i = 0; i < taskQueue.length; i += 1) {
+      const taskId = taskQueue[i];
+      const task = data.tasks.find((t) => t.id === taskId);
+      if (!task) {
+        taskQueue.splice(i, 1);
+        i -= 1;
+        continue;
+      }
+      if (isSessionLocked(task)) continue;
+      taskQueue.splice(i, 1);
+      return task;
+    }
+    return null;
+  }
+
+  function claimTask(io, task, agent) {
+    task.status = 'claimed';
+    task.startedAt = new Date().toISOString();
+    if (agent) {
+      task.assignedAgentId = agent.id;
+      agent.busyCount += 1;
+      agent.lastSeenAt = new Date().toISOString();
+    }
+    lockSession(task);
+    saveData();
+    log('task', 'task claimed', {
+      taskId: task.id,
+      sessionId: task.sessionId,
+      type: task.type,
+      assignedAgentId: task.assignedAgentId,
+      queueWaitMs: task.createdAt ? Date.now() - new Date(task.createdAt).getTime() : null
+    });
+    broadcastTaskStatus(io, task);
+    io.emit('queue:update', { queueLength: taskQueue.length });
+    return task;
+  }
+
+  function claimNextTask(io, agent) {
+    const task = takeNextRunnableTask();
+    if (!task) return null;
+    return claimTask(io, task, agent);
+  }
+
   function dispatchTasks(io) {
     let assigned = true;
     while (assigned) {
       assigned = false;
       const agent = pickAgent();
       if (!agent) return;
-      const taskId = taskQueue.shift();
-      if (!taskId) return;
-
-      const task = data.tasks.find((t) => t.id === taskId);
-      if (!task) continue;
-
-      task.status = 'claimed';
-      task.startedAt = new Date().toISOString();
-      task.assignedAgentId = agent.id;
-      agent.busyCount += 1;
-      agent.lastSeenAt = new Date().toISOString();
-      saveData();
-      log('task', 'task claimed', {
-        taskId: task.id,
-        sessionId: task.sessionId,
-        type: task.type,
-        assignedAgentId: task.assignedAgentId,
-        queueWaitMs: task.createdAt ? Date.now() - new Date(task.createdAt).getTime() : null
-      });
-
-      broadcastTaskStatus(io, task);
-      io.emit('queue:update', { queueLength: taskQueue.length });
+      const task = claimNextTask(io, agent);
+      if (!task) return;
       agent.socket.emit('task:assign', task);
       assigned = true;
     }
@@ -296,6 +341,7 @@ function createQueueManager({
         }
         task.assignedAgentId = null;
       }
+      releaseSession(task);
     }
 
     if (task && task.type === 'summary') {
@@ -419,6 +465,7 @@ function createQueueManager({
     pickAgent,
     recomputePrimaryAgent,
     requeueTasksForAgent,
+    releaseSession,
     pruneTasksIfNeeded,
     ensureDefaultSession,
     rebuildQueue,
@@ -427,6 +474,7 @@ function createQueueManager({
     broadcastMessage,
     broadcastTaskStatus,
     enqueueTask,
+    claimNextTask,
     dispatchTasks,
     completeTask,
     waitForTask

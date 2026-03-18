@@ -433,20 +433,10 @@ function registerRoutes(app, ctx) {
     saveData();
     queue.emitAgentStatus(io);
 
-    const taskId = taskQueue.shift();
-    if (!taskId) {
-      return res.json({ task: null, queueLength: taskQueue.length });
-    }
-
-    const task = data.tasks.find((t) => t.id === taskId);
+    const task = queue.claimNextTask(io, null);
     if (!task) {
       return res.json({ task: null, queueLength: taskQueue.length });
     }
-
-    task.status = 'claimed';
-    task.startedAt = new Date().toISOString();
-    saveData();
-    queue.broadcastTaskStatus(io, task);
 
     return res.json({ task, queueLength: taskQueue.length });
   });
