@@ -226,8 +226,8 @@ function registerRoutes(app, ctx) {
       const indicators = parseIndicators(req.body?.indicators);
       const promptTemplate = typeof req.body?.prompt === 'string' ? req.body.prompt.trim() : '';
       const timeoutMs = Math.min(
-        Math.max(Number.parseInt(req.body?.timeoutMs || '120000', 10), 1000),
-        300000
+        Math.max(Number.parseInt(req.body?.timeoutMs || '300000', 10), 1000),
+        600000
       );
 
       let imageUrl = typeof req.body?.imageUrl === 'string' ? req.body.imageUrl.trim() : '';
