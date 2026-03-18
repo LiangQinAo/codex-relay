@@ -92,26 +92,39 @@ async function preparePromptForImages(task) {
     return prompt;
   }
 
+  const isVisionTask = task.type && task.type.startsWith('vision');
   const urls = extractUrls(prompt).filter((url) => {
-    if (task.type && task.type.startsWith('vision')) return true;
+    if (isVisionTask) return true;
     return isLikelyImageUrl(url);
   });
   if (!urls.length) return prompt;
 
   let updated = prompt;
   const localNotes = [];
+  const localImages = [];
   for (const url of urls) {
     try {
       const filePath = await downloadToTemp(url);
-      updated = updated.split(url).join(filePath);
+      console.log(`[agent] downloaded image ${url} -> ${filePath}`);
+      localImages.push(filePath);
+      if (isVisionTask) {
+        updated = updated.split(url).join('');
+      } else {
+        updated = updated.split(url).join(filePath);
+      }
       localNotes.push(`已下载图片到本地路径：${filePath}`);
     } catch (err) {
+      console.log(`[agent] image download failed ${url}: ${err.message || err}`);
       localNotes.push(`图片下载失败：${url} (${err.message || err})`);
     }
   }
 
   if (localNotes.length) {
-    updated += `\n\n${localNotes.join('\n')}`;
+    if (isVisionTask && localImages.length) {
+      const imageMarkdown = localImages.map((p) => `![image](${p})`).join('\n');
+      updated += `\n\n以下为本地图片文件，请直接读取分析（不要再访问外部 URL）：\n${imageMarkdown}\n`;
+    }
+    updated += `\n${localNotes.join('\n')}`;
   }
   return updated;
 }
