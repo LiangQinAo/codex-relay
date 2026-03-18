@@ -109,6 +109,7 @@ function createQueueManager({
       log('warn', 'requeued tasks for offline agent', { agentId, count: requeued });
       saveData();
     }
+    return requeued;
   }
 
   function pruneTasksIfNeeded() {

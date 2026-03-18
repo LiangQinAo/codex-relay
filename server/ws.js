@@ -135,8 +135,11 @@ function registerSocket(io, ctx) {
         socketAgentMap.delete(socket.id);
         agent.socket = null;
         agent.status = 'offline';
-        queue.requeueTasksForAgent(agent.id);
+        const requeued = queue.requeueTasksForAgent(agent.id);
         queue.emitAgentStatus(io);
+        if (requeued > 0) {
+          queue.dispatchTasks(io);
+        }
       });
     } else {
       // Frontend connected: immediately push latest agent status/queue info

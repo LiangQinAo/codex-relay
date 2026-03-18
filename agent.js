@@ -10,6 +10,11 @@ const AUTH_TOKEN = process.env.AUTH_TOKEN;
 const CODEX_CWD = process.env.CODEX_CWD;
 const RESULT_MAX_CHARS = Number.parseInt(process.env.RESULT_MAX_CHARS || '50000', 10);
 const HEARTBEAT_MS = Number.parseInt(process.env.HEARTBEAT_MS || '5000', 10);
+const CODEX_STALL_MS = Number.parseInt(process.env.CODEX_STALL_MS || '90000', 10);
+const CODEX_MAX_MS = Number.parseInt(process.env.CODEX_MAX_MS || '600000', 10);
+const CODEX_EARLY_JSON = process.env.CODEX_EARLY_JSON !== '0';
+const CODEX_VISION_REASONING = process.env.CODEX_VISION_REASONING || 'low';
+const CODEX_NO_MESSAGE_MS = Number.parseInt(process.env.CODEX_NO_MESSAGE_MS || '120000', 10);
 const AGENT_ID = process.env.AGENT_ID || `${os.hostname()}-${process.pid}`;
 const AGENT_NAME = process.env.AGENT_NAME || os.hostname();
 const AGENT_CAPACITY = Math.max(1, Number.parseInt(process.env.AGENT_CAPACITY || '1', 10));
@@ -87,17 +92,14 @@ async function downloadToTemp(url) {
 
 async function preparePromptForImages(task) {
   const prompt = task.prompt || task.command || '';
-  if (!prompt) return prompt;
-  if (!(task.type && task.type.startsWith('vision')) && !prompt.includes('图片')) {
-    return prompt;
-  }
+  if (!prompt) return { prompt, imagePaths: [] };
 
-  const isVisionTask = task.type && task.type.startsWith('vision');
+  const isVisionTask = Boolean(task.type && task.type.startsWith('vision'));
   const urls = extractUrls(prompt).filter((url) => {
     if (isVisionTask) return true;
     return isLikelyImageUrl(url);
   });
-  if (!urls.length) return prompt;
+  if (!urls.length) return { prompt, imagePaths: [] };
 
   let updated = prompt;
   const localNotes = [];
@@ -121,24 +123,46 @@ async function preparePromptForImages(task) {
 
   if (localNotes.length) {
     if (isVisionTask && localImages.length) {
-      const imageMarkdown = localImages.map((p) => `![image](${p})`).join('\n');
-      updated += `\n\n以下为本地图片文件，请直接读取分析（不要再访问外部 URL）：\n${imageMarkdown}\n`;
+      updated += '\n\n图片已通过 --image 参数传入，无需访问外部 URL。';
     }
     updated += `\n${localNotes.join('\n')}`;
   }
-  return updated;
+  return { prompt: updated, imagePaths: localImages };
+}
+
+function tryParseJson(text) {
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch (_) {
+    return null;
+  }
 }
 
 // ── codex exec --json runner ─────────────────────────────────────────────
-function runCodex(prompt, onChunk) {
+function runCodex(prompt, options, onChunk) {
   return new Promise((resolve) => {
     const start = Date.now();
+    const startIso = new Date(start).toISOString();
+    const earlyJson = Boolean(options && options.earlyJson);
+    const configOverrides = Array.isArray(options?.configOverrides) ? options.configOverrides : [];
+    const imagePaths = Array.isArray(options?.imagePaths) ? options.imagePaths.filter(Boolean) : [];
 
     const args = [
       'exec',
       '--json',
       '--skip-git-repo-check',
     ];
+    configOverrides.forEach((override) => {
+      if (override) {
+        args.push('-c', override);
+      }
+    });
+    if (imagePaths.length) {
+      imagePaths.forEach((imgPath) => {
+        args.push('--image', imgPath);
+      });
+    }
     if (CODEX_CWD) args.push('--cd', CODEX_CWD);
     args.push(prompt);
 
@@ -150,13 +174,108 @@ function runCodex(prompt, onChunk) {
     let lineBuf = '';
     let finalText = '';
     let resolved = false;
+    let firstEventAt = null;
+    let turnCompletedAt = null;
+    let stdoutBytes = 0;
+    let lastEventAt = null;
+    let stallTimer = null;
+    let maxTimer = null;
+    let eventCount = 0;
+    let itemCompletedCount = 0;
+    let agentMessageCount = 0;
+    let reasoningCount = 0;
+    let heartbeatTimer = null;
+    let noMessageTimer = null;
+    let stderrFatal = null;
+
+    function resetStallTimer() {
+      if (!Number.isFinite(CODEX_STALL_MS) || CODEX_STALL_MS <= 0) return;
+      if (stallTimer) clearTimeout(stallTimer);
+      stallTimer = setTimeout(() => {
+        const now = Date.now();
+        const idleMs = lastEventAt ? now - lastEventAt : now - start;
+        const hasOutput = Boolean(finalText && finalText.trim());
+        console.log(`[agent][codex] stall_timeout ms=${CODEX_STALL_MS} idleMs=${idleMs} hasOutput=${hasOutput}`);
+        if (hasOutput) {
+          tryResolve(true, finalText, 0);
+        } else {
+          tryResolve(false, `stall timeout after ${idleMs}ms (no output)`, 1);
+        }
+      }, CODEX_STALL_MS);
+    }
+
+    function startMaxTimer() {
+      if (!Number.isFinite(CODEX_MAX_MS) || CODEX_MAX_MS <= 0) return;
+      maxTimer = setTimeout(() => {
+        const elapsed = Date.now() - start;
+        console.log(`[agent][codex] max_timeout ms=${CODEX_MAX_MS} elapsed=${elapsed}`);
+        const hasOutput = Boolean(finalText && finalText.trim());
+        if (hasOutput) {
+          tryResolve(true, finalText, 0);
+        } else {
+          tryResolve(false, `max timeout after ${elapsed}ms (no output)`, 1);
+        }
+      }, CODEX_MAX_MS);
+    }
+
+    function startNoMessageTimer() {
+      if (!Number.isFinite(CODEX_NO_MESSAGE_MS) || CODEX_NO_MESSAGE_MS <= 0) return;
+      noMessageTimer = setTimeout(() => {
+        if (agentMessageCount > 0 || finalText.trim()) return;
+        const elapsed = Date.now() - start;
+        console.log(`[agent][codex] no_message_timeout ms=${CODEX_NO_MESSAGE_MS} elapsed=${elapsed}`);
+        tryResolve(false, `no agent message after ${elapsed}ms`, 1);
+      }, CODEX_NO_MESSAGE_MS);
+    }
+
+    function startHeartbeat() {
+      heartbeatTimer = setInterval(() => {
+        const now = Date.now();
+        const elapsed = now - start;
+        const idleMs = lastEventAt ? now - lastEventAt : null;
+        console.log(`[agent][codex] heartbeat elapsed=${elapsed} idleMs=${idleMs} events=${eventCount} items=${itemCompletedCount} agentMessages=${agentMessageCount} reasoning=${reasoningCount} stdoutBytes=${stdoutBytes}`);
+      }, 30000);
+    }
 
     function tryResolve(ok, output, exitCode) {
       if (resolved) return;
       resolved = true;
       // kill the process so it doesn't linger after we're done
       try { child.kill('SIGTERM'); } catch (_) {}
-      resolve({ ok, output: output || '(empty)', durationMs: Date.now() - start, exitCode });
+      if (stallTimer) {
+        clearTimeout(stallTimer);
+        stallTimer = null;
+      }
+      if (maxTimer) {
+        clearTimeout(maxTimer);
+        maxTimer = null;
+      }
+      if (heartbeatTimer) {
+        clearInterval(heartbeatTimer);
+        heartbeatTimer = null;
+      }
+      if (noMessageTimer) {
+        clearTimeout(noMessageTimer);
+        noMessageTimer = null;
+      }
+      const durationMs = Date.now() - start;
+      const firstEventMs = firstEventAt ? firstEventAt - start : null;
+      const turnCompletedMs = turnCompletedAt ? turnCompletedAt - start : null;
+      console.log(`[agent][codex] done start=${startIso} durationMs=${durationMs} firstEventMs=${firstEventMs} turnCompletedMs=${turnCompletedMs} stdoutBytes=${stdoutBytes} exit=${exitCode}`);
+      resolve({ ok, output: output || '(empty)', durationMs, exitCode });
+    }
+
+    function collectText(text) {
+      if (!text) return;
+      finalText += (finalText ? '\n' : '') + text;
+      onChunk?.({ type: 'response', chunk: text });
+      if (earlyJson) {
+        const candidate = finalText.trim();
+        if (candidate.startsWith('{') && tryParseJson(candidate)) {
+          console.log('[agent][codex] early_json_resolve');
+          tryResolve(true, finalText, 0);
+        }
+      }
     }
 
     function processLine(line) {
@@ -165,37 +284,97 @@ function runCodex(prompt, onChunk) {
       let event;
       try { event = JSON.parse(trimmed); } catch (_) { return; }
 
+      if (!firstEventAt) {
+        firstEventAt = Date.now();
+        console.log(`[agent][codex] first_event ms=${firstEventAt - start}`);
+      }
+      lastEventAt = Date.now();
+      resetStallTimer();
+      eventCount += 1;
+
+      if (event.type === 'response.output_text.delta' && event.delta) {
+        collectText(String(event.delta));
+        return;
+      }
+      if (event.type === 'response.output_text.done' && event.text) {
+        collectText(String(event.text));
+        return;
+      }
+
       if (event.type === 'item.completed') {
+        itemCompletedCount += 1;
         const item = event.item || {};
         if (item.type === 'reasoning' && item.text) {
+          reasoningCount += 1;
           onChunk?.({ type: 'reasoning', chunk: item.text });
-        } else if (item.type === 'agent_message' && item.text) {
-          finalText += (finalText ? '\n' : '') + item.text;
-          onChunk?.({ type: 'response', chunk: item.text });
+        } else if (item.type === 'agent_message') {
+          agentMessageCount += 1;
+          if (item.text) collectText(String(item.text));
+          if (Array.isArray(item.content)) {
+            item.content.forEach((part) => {
+              if (!part) return;
+              if (part.type === 'output_text' && part.text) collectText(String(part.text));
+              if (part.type === 'text' && part.text) collectText(String(part.text));
+            });
+          }
+        } else if (item.text) {
+          // Fallback for other item types that carry text
+          collectText(String(item.text));
         }
       } else if (event.type === 'turn.completed') {
+        turnCompletedAt = Date.now();
+        console.log(`[agent][codex] turn_completed ms=${turnCompletedAt - start}`);
         // resolve immediately — don't wait for process to exit
+        tryResolve(true, finalText, 0);
+      } else if (event.type === 'response.completed') {
+        turnCompletedAt = Date.now();
+        console.log(`[agent][codex] response_completed ms=${turnCompletedAt - start}`);
         tryResolve(true, finalText, 0);
       }
     }
 
     child.stdout.on('data', (data) => {
+      stdoutBytes += data.length || 0;
       lineBuf += data.toString();
       const lines = lineBuf.split('\n');
       lineBuf = lines.pop();
       lines.forEach(processLine);
     });
 
-    child.stderr.on('data', () => {}); // suppress stderr noise
+    child.stderr.on('data', (data) => {
+      const text = data.toString().trim();
+      if (text) {
+        console.log(`[agent][codex] stderr ${text.slice(0, 500)}`);
+        if (!stderrFatal) {
+          const lower = text.toLowerCase();
+          if (lower.includes('invalid_token') || lower.includes('authrequired') || lower.includes('context canceled')) {
+            stderrFatal = text;
+            console.log('[agent][codex] stderr_fatal_detected');
+          }
+        }
+      }
+    });
 
     child.on('error', (err) => {
+      console.log(`[agent][codex] spawn_error ${err.message}`);
       tryResolve(false, `spawn error: ${err.message}`, null);
     });
 
     child.on('close', (code) => {
       if (lineBuf) processLine(lineBuf);
+      if (!turnCompletedAt) {
+        console.log(`[agent][codex] process_close code=${code}`);
+      }
+      if (stderrFatal && !finalText.trim()) {
+        tryResolve(false, `stderr fatal: ${stderrFatal}`, code);
+        return;
+      }
       tryResolve(code === 0, finalText, code);
     });
+
+    startMaxTimer();
+    startHeartbeat();
+    startNoMessageTimer();
   });
 }
 
@@ -329,8 +508,14 @@ async function runNext() {
     const taskLen = (task.prompt || task.command || '').length;
     console.log(`[agent] task start id=${task.id} len=${taskLen} preview=${taskText}`);
 
-    const preparedPrompt = await preparePromptForImages(task);
-    const result = await runCodex(preparedPrompt || '', ({ type, chunk }) => {
+    const { prompt: preparedPrompt, imagePaths } = await preparePromptForImages(task);
+    const isVision = Boolean(task.type && task.type.startsWith('vision'));
+    const earlyJson = CODEX_EARLY_JSON && isVision;
+    const configOverrides = [];
+    if (isVision && CODEX_VISION_REASONING) {
+      configOverrides.push(`model_reasoning_effort="${CODEX_VISION_REASONING}"`);
+    }
+    const result = await runCodex(preparedPrompt || '', { earlyJson, configOverrides, imagePaths }, ({ type, chunk }) => {
       socket.emit('task:stream', { id: task.id, type, chunk });
     });
     console.log(`[agent] task done id=${task.id} ok=${result.ok} exit=${result.exitCode} durationMs=${result.durationMs} outLen=${(result.output || '').length}`);

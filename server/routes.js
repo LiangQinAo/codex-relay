@@ -226,8 +226,8 @@ function registerRoutes(app, ctx) {
       const indicators = parseIndicators(req.body?.indicators);
       const promptTemplate = typeof req.body?.prompt === 'string' ? req.body.prompt.trim() : '';
       const timeoutMs = Math.min(
-        Math.max(Number.parseInt(req.body?.timeoutMs || '300000', 10), 1000),
-        600000
+        Math.max(Number.parseInt(req.body?.timeoutMs || '600000', 10), 1000),
+        900000
       );
 
       let imageUrl = typeof req.body?.imageUrl === 'string' ? req.body.imageUrl.trim() : '';
@@ -247,24 +247,20 @@ function registerRoutes(app, ctx) {
         return res.status(400).json({ ok: false, error: 'imageUrl or file is required' });
       }
 
-      const apiSession = data.sessions.find((s) => s.title === 'API Session' && s.archived)
-        || (() => {
-          const session = {
-            id: uuidv4(),
-            title: 'API Session',
-            systemPrompt: config.DEFAULT_SYSTEM_PROMPT,
-            summary: '',
-            summaryAnchor: 0,
-            summaryUpdatedAt: null,
-            summaryPending: false,
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-            archived: true
-          };
-          data.sessions.unshift(session);
-          saveData();
-          return session;
-        })();
+      const apiSession = {
+        id: uuidv4(),
+        title: `API Session ${new Date().toISOString()}`,
+        systemPrompt: config.DEFAULT_SYSTEM_PROMPT,
+        summary: '',
+        summaryAnchor: 0,
+        summaryUpdatedAt: null,
+        summaryPending: false,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        archived: true
+      };
+      data.sessions.unshift(apiSession);
+      saveData();
 
       const message = {
         id: uuidv4(),
@@ -582,6 +578,7 @@ function registerRoutes(app, ctx) {
 
   app.post('/submit-result', requireToken, (req, res) => {
     queue.completeTask(io, req.body || {});
+    queue.dispatchTasks(io);
     res.json({ status: 'ok' });
   });
 
