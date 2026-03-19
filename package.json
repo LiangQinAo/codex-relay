@@ -7,7 +7,8 @@
   "scripts": {
     "start": "node server.js",
     "agent": "node agent.js",
-    "agent:pool": "node agent-pool.js"
+    "agent:pool": "node agent-pool.js",
+    "benchmark:agent-latency": "node scripts/benchmark-agent-latency.js"
   },
   "dependencies": {
     "dotenv": "^16.4.7",

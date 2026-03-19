@@ -31,6 +31,97 @@ if (!AUTH_TOKEN) {
   process.exit(1);
 }
 
+function toIso(ts) {
+  return Number.isFinite(ts) ? new Date(ts).toISOString() : null;
+}
+
+function elapsedMs(start, end = Date.now()) {
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+  return Math.max(0, end - start);
+}
+
+function sanitizeUrlForLog(rawUrl) {
+  if (!rawUrl) return '';
+  try {
+    const parsed = new URL(rawUrl);
+    if (parsed.username) parsed.username = '***';
+    if (parsed.password) parsed.password = '***';
+    if (parsed.search) parsed.search = '?[redacted]';
+    return parsed.toString();
+  } catch (_) {
+    return rawUrl;
+  }
+}
+
+function redactForLog(text, maxLen = 200) {
+  if (!text) return '';
+  const replaced = String(text)
+    .replace(/https?:\/\/[^\s)]+/g, (url) => sanitizeUrlForLog(url))
+    .replace(/((?:token|auth|key|secret|password)[=:])([^\s]+)/gi, '$1[redacted]');
+  if (replaced.length <= maxLen) return replaced;
+  return `${replaced.slice(0, maxLen)}...`;
+}
+
+function taskLog(taskId, message, details) {
+  if (details && Object.keys(details).length > 0) {
+    console.log(`[agent][task ${taskId}] ${message} ${JSON.stringify(details)}`);
+    return;
+  }
+  console.log(`[agent][task ${taskId}] ${message}`);
+}
+
+function createStderrFlags() {
+  return {
+    totalChunks: 0,
+    skillLoadFailureCount: 0,
+    stateDbWarningCount: 0,
+    shellSnapshotWarningCount: 0,
+    invalidTokenCount: 0,
+    authRequiredCount: 0,
+    contextCanceledCount: 0,
+    otherCount: 0
+  };
+}
+
+function classifyStderrChunk(text, flags) {
+  if (!text) return { matched: false, isFatal: false };
+  flags.totalChunks += 1;
+  const lower = text.toLowerCase();
+  let matched = false;
+  if (lower.includes('failed to load skill')) {
+    flags.skillLoadFailureCount += 1;
+    matched = true;
+  }
+  if (lower.includes('state db discrepancy') || lower.includes('failed to open state db') || lower.includes('migration')) {
+    flags.stateDbWarningCount += 1;
+    matched = true;
+  }
+  if (lower.includes('shell_snapshot')) {
+    flags.shellSnapshotWarningCount += 1;
+    matched = true;
+  }
+  let isFatal = false;
+  if (lower.includes('invalid_token')) {
+    flags.invalidTokenCount += 1;
+    matched = true;
+    isFatal = true;
+  }
+  if (lower.includes('authrequired')) {
+    flags.authRequiredCount += 1;
+    matched = true;
+    isFatal = true;
+  }
+  if (lower.includes('context canceled')) {
+    flags.contextCanceledCount += 1;
+    matched = true;
+    isFatal = true;
+  }
+  if (!matched) {
+    flags.otherCount += 1;
+  }
+  return { matched, isFatal };
+}
+
 function truncate(text) {
   if (!text || text.length <= RESULT_MAX_CHARS) return text;
   return text.slice(0, RESULT_MAX_CHARS) + `\n... [truncated to ${RESULT_MAX_CHARS} chars]`;
@@ -174,24 +265,51 @@ async function downloadToTemp(url) {
   }
 }
 
-async function preparePromptForImages(task) {
+async function preparePromptForImages(task, taskId) {
+  const prepareStartedAt = Date.now();
   const prompt = task.prompt || task.command || '';
-  if (!prompt) return { prompt, imagePaths: [] };
+  if (!prompt) {
+    return {
+      prompt,
+      imagePaths: [],
+      metrics: {
+        imageUrlCount: 0,
+        downloadedImageCount: 0,
+        imageDownloadFailedCount: 0,
+        imageDownloadMs: 0
+      }
+    };
+  }
 
   const isVisionTask = Boolean(task.type && task.type.startsWith('vision'));
   const urls = extractUrls(prompt).filter((url) => {
     if (isVisionTask) return true;
     return isLikelyImageUrl(url);
   });
-  if (!urls.length) return { prompt, imagePaths: [] };
+  if (!urls.length) {
+    return {
+      prompt,
+      imagePaths: [],
+      metrics: {
+        imageUrlCount: 0,
+        downloadedImageCount: 0,
+        imageDownloadFailedCount: 0,
+        imageDownloadMs: elapsedMs(prepareStartedAt)
+      }
+    };
+  }
 
   let updated = prompt;
   const localNotes = [];
   const localImages = [];
+  let failedDownloads = 0;
   for (const url of urls) {
     try {
       const filePath = await downloadToTemp(url);
-      console.log(`[agent] downloaded image ${url} -> ${filePath}`);
+      taskLog(taskId, 'downloaded image', {
+        url: sanitizeUrlForLog(url),
+        filePath
+      });
       localImages.push(filePath);
       if (isVisionTask) {
         updated = updated.split(url).join('');
@@ -200,7 +318,11 @@ async function preparePromptForImages(task) {
       }
       localNotes.push(`已下载图片到本地路径：${filePath}`);
     } catch (err) {
-      console.log(`[agent] image download failed ${url}: ${err.message || err}`);
+      failedDownloads += 1;
+      taskLog(taskId, 'image download failed', {
+        url: sanitizeUrlForLog(url),
+        error: redactForLog(err.message || String(err))
+      });
       localNotes.push(`图片下载失败：${url} (${err.message || err})`);
     }
   }
@@ -211,7 +333,16 @@ async function preparePromptForImages(task) {
     }
     updated += `\n${localNotes.join('\n')}`;
   }
-  return { prompt: updated, imagePaths: localImages };
+  return {
+    prompt: updated,
+    imagePaths: localImages,
+    metrics: {
+      imageUrlCount: urls.length,
+      downloadedImageCount: localImages.length,
+      imageDownloadFailedCount: failedDownloads,
+      imageDownloadMs: elapsedMs(prepareStartedAt)
+    }
+  };
 }
 
 function tryParseJson(text) {
@@ -228,6 +359,7 @@ function runCodex(prompt, options, onChunk) {
   return new Promise((resolve) => {
     const start = Date.now();
     const startIso = new Date(start).toISOString();
+    const taskId = options?.taskId || 'unknown';
     const earlyJson = Boolean(options && options.earlyJson);
     const configOverrides = Array.isArray(options?.configOverrides) ? options.configOverrides : [];
     const imagePaths = Array.isArray(options?.imagePaths) ? options.imagePaths.filter(Boolean) : [];
@@ -250,6 +382,8 @@ function runCodex(prompt, options, onChunk) {
     if (CODEX_CWD) args.push('--cd', CODEX_CWD);
     args.push(prompt);
 
+    const stderrFlags = createStderrFlags();
+    const codexSpawnedAt = Date.now();
     const child = spawn('codex', args, {
       shell: false,
       stdio: ['ignore', 'pipe', 'pipe']
@@ -271,6 +405,21 @@ function runCodex(prompt, options, onChunk) {
     let heartbeatTimer = null;
     let noMessageTimer = null;
     let stderrFatal = null;
+    let firstAgentMessageAt = null;
+    let processCloseAt = null;
+    let timeoutStage = null;
+    let failedStage = null;
+
+    taskLog(taskId, 'codex spawn', {
+      codexSpawnedAt: toIso(codexSpawnedAt),
+      promptChars: prompt.length,
+      imagePaths: imagePaths.length,
+      configOverrides: configOverrides.length
+    });
+
+    function markFailedStage(stage) {
+      if (!failedStage) failedStage = stage;
+    }
 
     function resetStallTimer() {
       if (!Number.isFinite(CODEX_STALL_MS) || CODEX_STALL_MS <= 0) return;
@@ -279,7 +428,13 @@ function runCodex(prompt, options, onChunk) {
         const now = Date.now();
         const idleMs = lastEventAt ? now - lastEventAt : now - start;
         const hasOutput = Boolean(finalText && finalText.trim());
-        console.log(`[agent][codex] stall_timeout ms=${CODEX_STALL_MS} idleMs=${idleMs} hasOutput=${hasOutput}`);
+        timeoutStage = 'stall';
+        markFailedStage('timeout');
+        taskLog(taskId, 'codex stall timeout', {
+          timeoutMs: CODEX_STALL_MS,
+          idleMs,
+          hasOutput
+        });
         if (hasOutput) {
           tryResolve(true, finalText, 0);
         } else {
@@ -292,7 +447,12 @@ function runCodex(prompt, options, onChunk) {
       if (!Number.isFinite(CODEX_MAX_MS) || CODEX_MAX_MS <= 0) return;
       maxTimer = setTimeout(() => {
         const elapsed = Date.now() - start;
-        console.log(`[agent][codex] max_timeout ms=${CODEX_MAX_MS} elapsed=${elapsed}`);
+        timeoutStage = 'max';
+        markFailedStage('timeout');
+        taskLog(taskId, 'codex max timeout', {
+          timeoutMs: CODEX_MAX_MS,
+          elapsed
+        });
         const hasOutput = Boolean(finalText && finalText.trim());
         if (hasOutput) {
           tryResolve(true, finalText, 0);
@@ -307,7 +467,12 @@ function runCodex(prompt, options, onChunk) {
       noMessageTimer = setTimeout(() => {
         if (agentMessageCount > 0 || finalText.trim()) return;
         const elapsed = Date.now() - start;
-        console.log(`[agent][codex] no_message_timeout ms=${CODEX_NO_MESSAGE_MS} elapsed=${elapsed}`);
+        timeoutStage = 'no_message';
+        markFailedStage('timeout');
+        taskLog(taskId, 'codex no-message timeout', {
+          timeoutMs: CODEX_NO_MESSAGE_MS,
+          elapsed
+        });
         tryResolve(false, `no agent message after ${elapsed}ms`, 1);
       }, CODEX_NO_MESSAGE_MS);
     }
@@ -317,7 +482,15 @@ function runCodex(prompt, options, onChunk) {
         const now = Date.now();
         const elapsed = now - start;
         const idleMs = lastEventAt ? now - lastEventAt : null;
-        console.log(`[agent][codex] heartbeat elapsed=${elapsed} idleMs=${idleMs} events=${eventCount} items=${itemCompletedCount} agentMessages=${agentMessageCount} reasoning=${reasoningCount} stdoutBytes=${stdoutBytes}`);
+        taskLog(taskId, 'codex heartbeat', {
+          elapsed,
+          idleMs,
+          eventCount,
+          itemCompletedCount,
+          agentMessageCount,
+          reasoningCount,
+          stdoutBytes
+        });
       }, 30000);
     }
 
@@ -344,19 +517,64 @@ function runCodex(prompt, options, onChunk) {
       }
       const durationMs = Date.now() - start;
       const firstEventMs = firstEventAt ? firstEventAt - start : null;
+      const firstAgentMessageMs = firstAgentMessageAt ? firstAgentMessageAt - start : null;
       const turnCompletedMs = turnCompletedAt ? turnCompletedAt - start : null;
-      console.log(`[agent][codex] done start=${startIso} durationMs=${durationMs} firstEventMs=${firstEventMs} turnCompletedMs=${turnCompletedMs} stdoutBytes=${stdoutBytes} exit=${exitCode}`);
-      resolve({ ok, output: output || '(empty)', durationMs, exitCode });
+      taskLog(taskId, 'codex done', {
+        start: startIso,
+        durationMs,
+        firstEventMs,
+        firstAgentMessageMs,
+        turnCompletedMs,
+        stdoutBytes,
+        exitCode,
+        eventCount,
+        reasoningCount,
+        agentMessageCount,
+        failedStage,
+        timeoutStage,
+        stderrFlags
+      });
+      resolve({
+        ok,
+        output: output || '(empty)',
+        durationMs,
+        exitCode,
+        metrics: {
+          codexSpawnedAt: toIso(codexSpawnedAt),
+          firstEventAt: toIso(firstEventAt),
+          firstAgentMessageAt: toIso(firstAgentMessageAt),
+          turnCompletedAt: toIso(turnCompletedAt),
+          processCloseAt: toIso(processCloseAt),
+          codexFirstEventMs: firstEventMs,
+          codexFirstMessageMs: firstAgentMessageMs,
+          codexRunMs: durationMs,
+          processCloseMs: processCloseAt ? processCloseAt - start : null,
+          stdoutBytes,
+          eventCount,
+          itemCompletedCount,
+          agentMessageCount,
+          reasoningCount,
+          failedStage,
+          timeoutStage,
+          stderrFlags
+        }
+      });
     }
 
     function collectText(text) {
       if (!text) return;
+      if (!firstAgentMessageAt) {
+        firstAgentMessageAt = Date.now();
+        taskLog(taskId, 'codex first agent message', {
+          firstAgentMessageMs: firstAgentMessageAt - start
+        });
+      }
       finalText += (finalText ? '\n' : '') + text;
       onChunk?.({ type: 'response', chunk: text });
       if (earlyJson) {
         const candidate = finalText.trim();
         if (candidate.startsWith('{') && tryParseJson(candidate)) {
-          console.log('[agent][codex] early_json_resolve');
+          taskLog(taskId, 'codex early json resolve');
           tryResolve(true, finalText, 0);
         }
       }
@@ -370,7 +588,9 @@ function runCodex(prompt, options, onChunk) {
 
       if (!firstEventAt) {
         firstEventAt = Date.now();
-        console.log(`[agent][codex] first_event ms=${firstEventAt - start}`);
+        taskLog(taskId, 'codex first event', {
+          firstEventMs: firstEventAt - start
+        });
       }
       lastEventAt = Date.now();
       resetStallTimer();
@@ -407,12 +627,16 @@ function runCodex(prompt, options, onChunk) {
         }
       } else if (event.type === 'turn.completed') {
         turnCompletedAt = Date.now();
-        console.log(`[agent][codex] turn_completed ms=${turnCompletedAt - start}`);
+        taskLog(taskId, 'codex turn completed', {
+          turnCompletedMs: turnCompletedAt - start
+        });
         // resolve immediately — don't wait for process to exit
         tryResolve(true, finalText, 0);
       } else if (event.type === 'response.completed') {
         turnCompletedAt = Date.now();
-        console.log(`[agent][codex] response_completed ms=${turnCompletedAt - start}`);
+        taskLog(taskId, 'codex response completed', {
+          turnCompletedMs: turnCompletedAt - start
+        });
         tryResolve(true, finalText, 0);
       }
     }
@@ -428,31 +652,43 @@ function runCodex(prompt, options, onChunk) {
     child.stderr.on('data', (data) => {
       const text = data.toString().trim();
       if (text) {
-        console.log(`[agent][codex] stderr ${text.slice(0, 500)}`);
-        if (!stderrFatal) {
-          const lower = text.toLowerCase();
-          if (lower.includes('invalid_token') || lower.includes('authrequired') || lower.includes('context canceled')) {
-            stderrFatal = text;
-            console.log('[agent][codex] stderr_fatal_detected');
-          }
+        const classification = classifyStderrChunk(text, stderrFlags);
+        if (!classification.matched || classification.isFatal) {
+          taskLog(taskId, 'codex stderr', {
+            preview: redactForLog(text, 240)
+          });
+        }
+        if (classification.isFatal && !stderrFatal) {
+          stderrFatal = redactForLog(text, 240);
+          markFailedStage('codex');
+          taskLog(taskId, 'codex stderr fatal detected', {
+            preview: stderrFatal
+          });
         }
       }
     });
 
     child.on('error', (err) => {
-      console.log(`[agent][codex] spawn_error ${err.message}`);
+      markFailedStage('spawn');
+      taskLog(taskId, 'codex spawn error', {
+        error: redactForLog(err.message || String(err))
+      });
       tryResolve(false, `spawn error: ${err.message}`, null);
     });
 
     child.on('close', (code) => {
+      processCloseAt = Date.now();
       if (lineBuf) processLine(lineBuf);
-      if (!turnCompletedAt) {
-        console.log(`[agent][codex] process_close code=${code}`);
-      }
+      taskLog(taskId, 'codex process close', {
+        code,
+        processCloseMs: processCloseAt - start,
+        hadTurnCompleted: Boolean(turnCompletedAt)
+      });
       if (stderrFatal && !finalText.trim()) {
         tryResolve(false, `stderr fatal: ${stderrFatal}`, code);
         return;
       }
+      if (code !== 0) markFailedStage('codex');
       tryResolve(code === 0, finalText, code);
     });
 
@@ -560,7 +796,10 @@ socket.on('disconnect', (reason) => {
 
 socket.on('task:assign', async (task) => {
   if (!task) return;
-  pendingTasks.push(task);
+  pendingTasks.push({
+    task,
+    taskReceivedAt: Date.now()
+  });
   runNext();
 });
 
@@ -584,53 +823,135 @@ setInterval(() => {
 
 async function runNext() {
   while (running < AGENT_CAPACITY && pendingTasks.length > 0) {
-    const task = pendingTasks.shift();
-    if (!task) return;
+    const entry = pendingTasks.shift();
+    if (!entry?.task) return;
+    const { task, taskReceivedAt } = entry;
     running += 1;
     lastTaskId = task.id;
-    const startedAt = Date.now();
-    const taskText = (task.prompt || task.command || '').slice(0, 160);
-    const taskLen = (task.prompt || task.command || '').length;
-    console.log(`[agent] task start id=${task.id} len=${taskLen} preview=${taskText}`);
+    const rawPrompt = task.prompt || task.command || '';
+    taskLog(task.id, 'task start', {
+      taskType: task.type || 'chat',
+      promptChars: rawPrompt.length,
+      preview: redactForLog(rawPrompt, 160)
+    });
 
-    const { prompt: preparedPrompt, imagePaths } = await preparePromptForImages(task);
-    const isVision = Boolean(task.type && task.type.startsWith('vision'));
-    const earlyJson = CODEX_EARLY_JSON && isVision;
-    const configOverrides = [];
-    if (isVision && CODEX_VISION_REASONING) {
-      configOverrides.push(`model_reasoning_effort="${CODEX_VISION_REASONING}"`);
-    }
-    if (isVision && CODEX_PRECHECK) {
-      const precheck = await precheckProxyAvailability();
-      if (precheck) {
-        console.log(`[agent][precheck] fail type=${precheck.type} message=${precheck.message}`);
-        socket.emit('task:complete', {
-          id: task.id,
-          ok: false,
-          result: truncate(JSON.stringify({ error: precheck.type, message: precheck.message })),
-          durationMs: Date.now() - startedAt,
-          agentId: AGENT_ID
-        });
-        running -= 1;
-        socket.emit('agent:ready');
-        continue;
+    const taskCompleted = (payload) => {
+      socket.emit('task:complete', {
+        id: task.id,
+        agentId: AGENT_ID,
+        ...payload
+      });
+    };
+
+    try {
+      const preparePromptStartAt = Date.now();
+      let failedStage = null;
+      const { prompt: preparedPrompt, imagePaths, metrics: imageMetrics } = await preparePromptForImages(task, task.id);
+      const preparePromptDoneAt = Date.now();
+      const isVision = Boolean(task.type && task.type.startsWith('vision'));
+      const earlyJson = CODEX_EARLY_JSON && isVision;
+      const configOverrides = [];
+      if (isVision && CODEX_VISION_REASONING) {
+        configOverrides.push(`model_reasoning_effort="${CODEX_VISION_REASONING}"`);
       }
+      if (isVision && CODEX_PRECHECK) {
+        const precheck = await precheckProxyAvailability();
+        if (precheck) {
+          failedStage = 'precheck';
+          const completedAt = Date.now();
+          const metrics = {
+            taskReceivedAt: toIso(taskReceivedAt),
+            preparePromptStartAt: toIso(preparePromptStartAt),
+            preparePromptDoneAt: toIso(preparePromptDoneAt),
+            taskCompletedAt: toIso(completedAt),
+            preparePromptMs: elapsedMs(preparePromptStartAt, preparePromptDoneAt),
+            totalMs: elapsedMs(taskReceivedAt, completedAt),
+            taskType: task.type || 'chat',
+            promptChars: preparedPrompt.length,
+            resultChars: 0,
+            failedStage,
+            timeoutStage: null,
+            ...imageMetrics
+          };
+          taskLog(task.id, 'precheck failed', {
+            type: precheck.type,
+            message: redactForLog(precheck.message),
+            metrics
+          });
+          taskCompleted({
+            ok: false,
+            result: truncate(JSON.stringify({ error: precheck.type, message: precheck.message })),
+            durationMs: metrics.totalMs,
+            metrics
+          });
+          continue;
+        }
+      }
+      const result = await runCodex(preparedPrompt || '', {
+        taskId: task.id,
+        earlyJson,
+        configOverrides,
+        imagePaths
+      }, ({ type, chunk }) => {
+        socket.emit('task:stream', { id: task.id, type, chunk });
+      });
+      const completedAt = Date.now();
+      const metrics = {
+        taskReceivedAt: toIso(taskReceivedAt),
+        preparePromptStartAt: toIso(preparePromptStartAt),
+        preparePromptDoneAt: toIso(preparePromptDoneAt),
+        taskCompletedAt: toIso(completedAt),
+        preparePromptMs: elapsedMs(preparePromptStartAt, preparePromptDoneAt),
+        totalMs: elapsedMs(taskReceivedAt, completedAt),
+        taskType: task.type || 'chat',
+        promptChars: preparedPrompt.length,
+        resultChars: (result.output || '').length,
+        ...imageMetrics,
+        ...result.metrics
+      };
+      taskLog(task.id, 'task done', {
+        ok: result.ok,
+        exitCode: result.exitCode,
+        totalMs: metrics.totalMs,
+        codexRunMs: metrics.codexRunMs,
+        codexFirstEventMs: metrics.codexFirstEventMs,
+        imageDownloadMs: metrics.imageDownloadMs,
+        resultChars: metrics.resultChars,
+        failedStage: metrics.failedStage,
+        timeoutStage: metrics.timeoutStage
+      });
+      taskCompleted({
+        ok: result.ok,
+        result: truncate(result.output),
+        durationMs: result.durationMs,
+        metrics
+      });
+    } catch (err) {
+      const completedAt = Date.now();
+      const metrics = {
+        taskReceivedAt: toIso(taskReceivedAt),
+        taskCompletedAt: toIso(completedAt),
+        totalMs: elapsedMs(taskReceivedAt, completedAt),
+        taskType: task.type || 'chat',
+        promptChars: rawPrompt.length,
+        resultChars: 0,
+        failedStage: 'preparePrompt',
+        timeoutStage: null
+      };
+      taskLog(task.id, 'task crashed', {
+        error: redactForLog(err.message || String(err)),
+        failedStage: metrics.failedStage
+      });
+      taskCompleted({
+        ok: false,
+        result: truncate(`agent error: ${err.message || err}`),
+        durationMs: metrics.totalMs,
+        metrics
+      });
+    } finally {
+      running -= 1;
+      socket.emit('agent:ready');
     }
-    const result = await runCodex(preparedPrompt || '', { earlyJson, configOverrides, imagePaths }, ({ type, chunk }) => {
-      socket.emit('task:stream', { id: task.id, type, chunk });
-    });
-    console.log(`[agent] task done id=${task.id} ok=${result.ok} exit=${result.exitCode} durationMs=${result.durationMs} outLen=${(result.output || '').length}`);
-
-    socket.emit('task:complete', {
-      id: task.id,
-      ok: result.ok,
-      result: truncate(result.output),
-      durationMs: result.durationMs,
-      agentId: AGENT_ID
-    });
-
-    running -= 1;
-    socket.emit('agent:ready');
   }
 }
 

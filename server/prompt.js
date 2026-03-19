@@ -1,6 +1,24 @@
-const { getRecentMessagesWithinTokens } = require('./utils');
+const { estimateTokens, getRecentMessagesWithinTokens } = require('./utils');
 
-function buildPrompt({ sessionId, newMessage, data, config }) {
+function createPromptMetrics({
+  prompt,
+  historyMessageCount = 0,
+  hasSummary = false,
+  newMessageChars = 0,
+  promptType = 'chat'
+}) {
+  const text = typeof prompt === 'string' ? prompt : '';
+  return {
+    promptType,
+    promptChars: text.length,
+    estimatedPromptTokens: estimateTokens(text),
+    historyMessageCount,
+    hasSummary: Boolean(hasSummary),
+    newMessageChars
+  };
+}
+
+function buildPromptPayload({ sessionId, newMessage, data, config }) {
   const session = data.sessions.find((s) => s.id === sessionId);
   const allMessages = data.messages.filter((m) => m.sessionId === sessionId);
   const history = getRecentMessagesWithinTokens(allMessages, config.MAX_PROMPT_TOKENS);
@@ -32,7 +50,21 @@ function buildPrompt({ sessionId, newMessage, data, config }) {
   lines.push(`用户: ${newMessage}`);
   lines.push('请作为智能助手回复用户，并尽量清晰简洁。');
 
-  return lines.join('\n');
+  const prompt = lines.join('\n');
+  return {
+    prompt,
+    metrics: createPromptMetrics({
+      prompt,
+      historyMessageCount: history.length,
+      hasSummary: Boolean(session?.summary),
+      newMessageChars: typeof newMessage === 'string' ? newMessage.length : 0,
+      promptType: 'chat'
+    })
+  };
 }
 
-module.exports = { buildPrompt };
+function buildPrompt(args) {
+  return buildPromptPayload(args).prompt;
+}
+
+module.exports = { buildPrompt, buildPromptPayload, createPromptMetrics };

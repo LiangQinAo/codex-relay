@@ -9,7 +9,7 @@ const { v4: uuidv4 } = require('uuid');
 const { config } = require('./server/config');
 const { createLogger } = require('./server/logger');
 const { loadData, createSaver } = require('./server/storage');
-const { buildPrompt } = require('./server/prompt');
+const { buildPrompt, buildPromptPayload, createPromptMetrics } = require('./server/prompt');
 const { buildSummaryPrompt, getSummaryChunk } = require('./server/summary');
 const { createQueueManager } = require('./server/queue');
 const { registerRoutes } = require('./server/routes');
@@ -52,7 +52,9 @@ const queue = createQueueManager({
   uuidv4,
   buildSummaryPrompt,
   getSummaryChunk,
-  buildPrompt
+  buildPrompt,
+  buildPromptPayload,
+  createPromptMetrics
 });
 
 queue.ensureDefaultSession();
@@ -70,6 +72,8 @@ registerRoutes(app, {
   io,
   uuidv4,
   buildPrompt,
+  buildPromptPayload,
+  createPromptMetrics,
   queue,
   log
 });
@@ -83,7 +87,9 @@ registerSocket(io, {
   log,
   uuidv4,
   queue,
-  buildPrompt
+  buildPrompt,
+  buildPromptPayload,
+  createPromptMetrics
 });
 
 setInterval(() => {
@@ -104,6 +110,7 @@ setInterval(() => {
         const started = new Date(task.startedAt).getTime();
         if (now - started > config.TASK_TIMEOUT_MS) {
           task.status = 'queued';
+          task.assignedAt = null;
           task.startedAt = null;
           task.ok = null;
           if (task.assignedAgentId) {

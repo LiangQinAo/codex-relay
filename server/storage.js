@@ -37,6 +37,7 @@ function loadData(dataFile) {
     parsed.tasks = (parsed.tasks || []).map((task) => ({
       type: task.type || 'chat',
       assignedAgentId: task.assignedAgentId || null,
+      metrics: task.metrics && typeof task.metrics === 'object' ? task.metrics : {},
       ...task
     }));
     return parsed;

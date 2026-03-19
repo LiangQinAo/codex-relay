@@ -11,7 +11,8 @@ function createQueueManager({
   uuidv4,
   buildSummaryPrompt,
   getSummaryChunk,
-  buildPrompt
+  buildPrompt,
+  createPromptMetrics
 }) {
   let agentPickIndex = 0;
   const taskWaiters = new Map();
@@ -34,6 +35,17 @@ function createQueueManager({
   function releaseSession(task) {
     const key = getSessionKey(task);
     if (key) runningSessions.delete(key);
+  }
+
+  function ensureTaskMetrics(task) {
+    if (!task) return {};
+    if (!task.metrics || typeof task.metrics !== 'object') {
+      task.metrics = {};
+    }
+    if (!task.metrics.prompt || typeof task.metrics.prompt !== 'object') {
+      task.metrics.prompt = {};
+    }
+    return task.metrics;
   }
 
   function upsertAgent(agentId, updates = {}) {
@@ -97,6 +109,7 @@ function createQueueManager({
     data.tasks.forEach((task) => {
       if (task.status === 'claimed' && task.assignedAgentId === agentId) {
         task.status = 'queued';
+        task.assignedAt = null;
         task.startedAt = null;
         task.ok = null;
         task.assignedAgentId = null;
@@ -207,6 +220,15 @@ function createQueueManager({
       ok: null,
       summaryTargetAnchor: actualTargetAnchor
     };
+    task.metrics = {
+      prompt: createPromptMetrics({
+        prompt: task.prompt,
+        historyMessageCount: chunk.length,
+        hasSummary: Boolean(session.summary),
+        newMessageChars: 0,
+        promptType: 'summary'
+      })
+    };
 
     session.summaryPending = true;
     data.tasks.push(task);
@@ -285,7 +307,9 @@ function createQueueManager({
 
   function claimTask(io, task, agent) {
     task.status = 'claimed';
+    task.assignedAt = new Date().toISOString();
     task.startedAt = new Date().toISOString();
+    ensureTaskMetrics(task);
     if (agent) {
       task.assignedAgentId = agent.id;
       agent.busyCount += 1;
@@ -329,9 +353,36 @@ function createQueueManager({
     const ok = typeof payload.ok === 'boolean' ? payload.ok : true;
     const durationMs = Number.isFinite(payload.durationMs) ? payload.durationMs : 0;
     const resultText = typeof payload.result === 'string' ? payload.result : '';
+    const payloadMetrics = payload.metrics && typeof payload.metrics === 'object' ? payload.metrics : {};
 
     const task = data.tasks.find((t) => t.id === taskId);
     if (task) {
+      const existingMetrics = ensureTaskMetrics(task);
+      const mergedPromptMetrics = {
+        ...existingMetrics.prompt,
+        ...(payloadMetrics.prompt && typeof payloadMetrics.prompt === 'object' ? payloadMetrics.prompt : {})
+      };
+      const mergedMetrics = {
+        ...existingMetrics,
+        ...payloadMetrics,
+        prompt: mergedPromptMetrics
+      };
+      if (!Number.isFinite(mergedMetrics.queueWaitMs) && task.createdAt && task.assignedAt) {
+        mergedMetrics.queueWaitMs = Math.max(0, new Date(task.assignedAt).getTime() - new Date(task.createdAt).getTime());
+      }
+      if (!Number.isFinite(mergedMetrics.endToEndMs) && task.createdAt) {
+        mergedMetrics.endToEndMs = Math.max(0, Date.now() - new Date(task.createdAt).getTime());
+      }
+      if (!Number.isFinite(mergedMetrics.promptChars) && Number.isFinite(mergedPromptMetrics.promptChars)) {
+        mergedMetrics.promptChars = mergedPromptMetrics.promptChars;
+      }
+      if (!Number.isFinite(mergedMetrics.resultChars)) {
+        mergedMetrics.resultChars = resultText.length;
+      }
+      if (!Number.isFinite(mergedMetrics.totalMs) && durationMs > 0) {
+        mergedMetrics.totalMs = durationMs;
+      }
+      task.metrics = mergedMetrics;
       task.status = 'completed';
       task.ok = ok;
       task.completedAt = new Date().toISOString();

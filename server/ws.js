@@ -8,7 +8,7 @@ function registerSocket(io, ctx) {
     log,
     uuidv4,
     queue,
-    buildPrompt
+    buildPromptPayload
   } = ctx;
 
   io.use((socket, next) => {
@@ -179,18 +179,22 @@ function registerSocket(io, ctx) {
             length: content.length
           });
 
+          const promptPayload = buildPromptPayload({ sessionId: session.id, newMessage: content, data, config });
           const task = {
             id: uuidv4(),
             sessionId: session.id,
             userMessageId: message.id,
             type: 'chat',
             command: content,
-            prompt: buildPrompt({ sessionId: session.id, newMessage: content, data, config }),
+            prompt: promptPayload.prompt,
             status: 'queued',
             createdAt: new Date().toISOString(),
             startedAt: null,
             completedAt: null,
-            ok: null
+            ok: null,
+            metrics: {
+              prompt: promptPayload.metrics
+            }
           };
 
           message.taskId = task.id;

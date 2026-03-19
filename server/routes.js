@@ -35,6 +35,8 @@ function registerRoutes(app, ctx) {
     io,
     uuidv4,
     buildPrompt,
+    buildPromptPayload,
+    createPromptMetrics,
     queue,
     log
   } = ctx;
@@ -286,7 +288,16 @@ function registerRoutes(app, ctx) {
         createdAt: new Date().toISOString(),
         startedAt: null,
         completedAt: null,
-        ok: null
+        ok: null,
+        metrics: {
+          prompt: createPromptMetrics({
+            prompt,
+            historyMessageCount: 0,
+            hasSummary: false,
+            newMessageChars: 0,
+            promptType: 'vision-medical'
+          })
+        }
       };
 
       message.taskId = task.id;
@@ -421,18 +432,22 @@ function registerRoutes(app, ctx) {
       length: command.length
     });
 
+    const promptPayload = buildPromptPayload({ sessionId: session.id, newMessage: command, data, config });
     const task = {
       id: uuidv4(),
       sessionId: session.id,
       userMessageId: message.id,
       type: 'chat',
       command,
-      prompt: buildPrompt({ sessionId: session.id, newMessage: command, data, config }),
+      prompt: promptPayload.prompt,
       status: 'queued',
       createdAt: new Date().toISOString(),
       startedAt: null,
       completedAt: null,
-      ok: null
+      ok: null,
+      metrics: {
+        prompt: promptPayload.metrics
+      }
     };
 
     message.taskId = task.id;
@@ -573,18 +588,22 @@ function registerRoutes(app, ctx) {
       length: content.length
     });
 
+    const promptPayload = buildPromptPayload({ sessionId: session.id, newMessage: content, data, config });
     const task = {
       id: uuidv4(),
       sessionId: session.id,
       userMessageId: message.id,
       type: 'chat',
       command: content,
-      prompt: buildPrompt({ sessionId: session.id, newMessage: content, data, config }),
+      prompt: promptPayload.prompt,
       status: 'queued',
       createdAt: new Date().toISOString(),
       startedAt: null,
       completedAt: null,
-      ok: null
+      ok: null,
+      metrics: {
+        prompt: promptPayload.metrics
+      }
     };
 
     message.taskId = task.id;
