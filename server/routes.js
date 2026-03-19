@@ -297,11 +297,36 @@ function registerRoutes(app, ctx) {
 
       const result = await queue.waitForTask(task.id, timeoutMs);
       if (!result || result.ok === false && result.error) {
+        log('vision', 'medical timeout', {
+          taskId: task.id,
+          sessionId: apiSession.id,
+          imageUrl,
+          error: result?.error || 'timeout'
+        });
         return res.status(504).json({ ok: false, error: result?.error || 'timeout', taskId: task.id });
       }
 
+      const rawText = result.result || '';
+      const blurHint = /不清晰|模糊|无法辨认|看不清|unclear|blurry|low quality/i.test(rawText);
+      log('vision', 'medical response', {
+        taskId: task.id,
+        sessionId: apiSession.id,
+        imageUrl,
+        ok: result.ok,
+        blurHint,
+        rawLen: rawText.length,
+        rawPreview: rawText.slice(0, 500)
+      });
+
       const parsed = extractJson(result.result || '');
       if (!parsed) {
+        log('vision', 'medical invalid json', {
+          taskId: task.id,
+          sessionId: apiSession.id,
+          imageUrl,
+          rawLen: rawText.length,
+          rawPreview: rawText.slice(0, 500)
+        });
         return res.status(502).json({
           ok: false,
           error: 'invalid json response',
